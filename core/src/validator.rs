@@ -1,8 +1,16 @@
 use std::collections::HashMap;
+use std::path::Path;
 
 use thiserror::Error;
 
 use crate::ast::{ResponseMapping, UsmlDocument};
+use crate::resolver::{self, DbmlTable, OpenapiResponse};
+
+/// 解決済みの外部スキーマ情報
+pub struct ResolveContext {
+    pub openapi: Option<OpenapiResponse>,
+    pub dbml_tables: Vec<DbmlTable>,
+}
 
 #[derive(Debug, Error, PartialEq)]
 pub enum ValidationError {
@@ -21,6 +29,83 @@ pub fn validate(doc: &UsmlDocument) -> Vec<ValidationError> {
     validate_response_mapping(&doc.usecase.response_mapping, &imported_tables, &mut errors);
     validate_filters(doc, &mut errors);
     validate_transforms(doc, &mut errors);
+
+    errors
+}
+
+/// import 宣言を実際に解決する
+fn resolve_imports(doc: &UsmlDocument, base_dir: &str) -> (ResolveContext, Vec<ValidationError>) {
+    let mut errors = Vec::new();
+    let mut ctx = ResolveContext {
+        openapi: None,
+        dbml_tables: Vec::new(),
+    };
+
+    // OpenAPI 解決
+    if let Some(openapi_ref) = &doc.import.openapi {
+        if let Some((file, path, method, status)) = resolver::openapi::parse_openapi_ref(openapi_ref) {
+            let full_path = Path::new(base_dir).join(file).to_string_lossy().to_string();
+            match resolver::openapi::resolve_openapi(&full_path, path, method, status) {
+                Ok(resp) => ctx.openapi = Some(resp),
+                Err(e) => errors.push(ValidationError::Warning(
+                    "import.openapi".to_string(),
+                    format!("OpenAPI解決に失敗しました: {}", e),
+                )),
+            }
+        }
+    }
+
+    // DBML 解決
+    if let Some(dbml_refs) = &doc.import.dbml {
+        for dbml_ref in dbml_refs {
+            if let Some((file, _table_name)) = resolver::dbml::parse_dbml_ref(dbml_ref) {
+                let full_path = Path::new(base_dir).join(file).to_string_lossy().to_string();
+                match resolver::dbml::resolve_dbml(&full_path) {
+                    Ok(tables) => {
+                        for table in tables {
+                            if !ctx.dbml_tables.iter().any(|t| t.name == table.name) {
+                                ctx.dbml_tables.push(table);
+                            }
+                        }
+                    }
+                    Err(e) => errors.push(ValidationError::Warning(
+                        "import.dbml".to_string(),
+                        format!("DBML解決に失敗しました: {}", e),
+                    )),
+                }
+            }
+        }
+    }
+
+    (ctx, errors)
+}
+
+/// リゾルバーを使用したバリデーション
+/// base_dir: import参照のファイルパスを解決するための基準ディレクトリ
+pub fn validate_with_resolve(doc: &UsmlDocument, base_dir: &str) -> Vec<ValidationError> {
+    let mut errors = Vec::new();
+
+    // まず基本バリデーション実行
+    errors.extend(validate(doc));
+
+    // 外部ファイル解決
+    let (ctx, resolve_errors) = resolve_imports(doc, base_dir);
+    errors.extend(resolve_errors);
+
+    // Rule 1: OpenAPIレスポンスフィールドとの照合
+    if let Some(ref openapi) = ctx.openapi {
+        validate_openapi_fields(&doc.usecase.response_mapping, openapi, &mut errors);
+    }
+
+    // Rule 3: DBMLカラム存在確認
+    if !ctx.dbml_tables.is_empty() {
+        validate_dbml_columns(&doc.usecase.response_mapping, &ctx.dbml_tables, &mut errors);
+    }
+
+    // Rule 10アップグレード: OpenAPIパラメータの存在確認
+    if let Some(ref openapi) = ctx.openapi {
+        validate_transform_params(&doc.usecase.transforms, openapi, &mut errors);
+    }
 
     errors
 }
@@ -271,6 +356,80 @@ fn validate_transforms(doc: &UsmlDocument, errors: &mut Vec<ValidationError>) {
     }
 }
 
+/// Rule 1: response_mapping のフィールド名がOpenAPIレスポンスに存在するか
+fn validate_openapi_fields(
+    mappings: &[ResponseMapping],
+    openapi: &OpenapiResponse,
+    errors: &mut Vec<ValidationError>,
+) {
+    for mapping in mappings {
+        if !openapi.fields.contains(&mapping.field) {
+            errors.push(ValidationError::Rule(
+                "response_mapping.field".to_string(),
+                format!(
+                    "フィールド {} がOpenAPIレスポンスのプロパティに存在しません",
+                    mapping.field
+                ),
+            ));
+        }
+    }
+}
+
+/// Rule 3: source で参照されるテーブル.カラムがDBMLに実際に存在するか
+fn validate_dbml_columns(
+    mappings: &[ResponseMapping],
+    dbml_tables: &[DbmlTable],
+    errors: &mut Vec<ValidationError>,
+) {
+    for mapping in mappings {
+        if let Some(source) = &mapping.source {
+            if let Some((table_name, col_name)) = source.split_once('.') {
+                if let Some(table) = dbml_tables.iter().find(|t| t.name == table_name) {
+                    if !table.columns.contains(&col_name.to_string()) {
+                        errors.push(ValidationError::Rule(
+                            "response_mapping.source".to_string(),
+                            format!(
+                                "カラム {} がテーブル {} に存在しません",
+                                col_name, table_name
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+
+        // サブフィールドの再帰検証
+        if let Some(sub_fields) = &mapping.fields {
+            validate_dbml_columns(sub_fields, dbml_tables, errors);
+        }
+    }
+}
+
+/// Rule 10: transform の condition.param がOpenAPIパラメータに存在するか
+fn validate_transform_params(
+    transforms: &[crate::ast::Transform],
+    openapi: &OpenapiResponse,
+    errors: &mut Vec<ValidationError>,
+) {
+    for transform in transforms {
+        if let Some(conditions) = &transform.condition {
+            for cond in conditions {
+                if let Some(param) = &cond.param {
+                    if !openapi.parameters.contains(param) {
+                        errors.push(ValidationError::Rule(
+                            "transforms.condition.param".to_string(),
+                            format!(
+                                "transform {} の condition.param {} がOpenAPIパラメータに存在しません",
+                                transform.target, param
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// response_mapping から使われるテーブル名を収集する
 fn collect_used_tables(mappings: &[ResponseMapping]) -> Vec<String> {
     let mut tables = Vec::new();
@@ -314,6 +473,7 @@ fn collect_used_tables(mappings: &[ResponseMapping]) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::parser;
+    use crate::resolver::{DbmlTable, OpenapiResponse};
 
     #[test]
     fn test_valid_document_no_errors() {
@@ -599,5 +759,95 @@ usecase:
         // source_table: tags と join_chain の最後のテーブル tags が一致するのでエラーなし
         let hard_errors: Vec<_> = errors.iter().filter(|e| matches!(e, ValidationError::Rule(..))).collect();
         assert!(hard_errors.is_empty(), "エラーがありました: {:?}", hard_errors);
+    }
+
+    #[test]
+    fn test_validate_openapi_fields_mismatch() {
+        // OpenAPI に id, name, email があるが response_mapping に nonexistent を指定
+        let openapi = OpenapiResponse {
+            fields: vec!["id".to_string(), "name".to_string(), "email".to_string()],
+            parameters: vec!["status".to_string()],
+        };
+        let yaml = r#"
+version: "0.1"
+import:
+  openapi: ./api.yaml#paths["/users"].get.responses["200"]
+  dbml:
+    - ./schema.dbml#tables["users"]
+usecase:
+  name: テスト
+  response_mapping:
+    - field: nonexistent
+      source: users.id
+"#;
+        let doc = parser::parse(yaml).unwrap();
+        let mappings = &doc.usecase.response_mapping;
+        let mut errors = Vec::new();
+        validate_openapi_fields(mappings, &openapi, &mut errors);
+        assert!(errors
+            .iter()
+            .any(|e| matches!(e, ValidationError::Rule(rule, _) if rule == "response_mapping.field")));
+    }
+
+    #[test]
+    fn test_validate_dbml_columns_missing() {
+        let tables = vec![DbmlTable {
+            name: "users".to_string(),
+            columns: vec!["id".to_string(), "name".to_string(), "email".to_string()],
+        }];
+        let yaml = r#"
+version: "0.1"
+import:
+  openapi: ./api.yaml#paths["/users"].get.responses["200"]
+  dbml:
+    - ./schema.dbml#tables["users"]
+usecase:
+  name: テスト
+  response_mapping:
+    - field: phone
+      source: users.phone
+"#;
+        let doc = parser::parse(yaml).unwrap();
+        let mappings = &doc.usecase.response_mapping;
+        let mut errors = Vec::new();
+        validate_dbml_columns(mappings, &tables, &mut errors);
+        assert!(errors
+            .iter()
+            .any(|e| matches!(e, ValidationError::Rule(rule, _) if rule == "response_mapping.source")));
+    }
+
+    #[test]
+    fn test_validate_transform_params_missing() {
+        let openapi = OpenapiResponse {
+            fields: vec!["id".to_string()],
+            parameters: vec!["status".to_string()],
+        };
+        let yaml = r#"
+version: "0.1"
+import:
+  openapi: ./api.yaml#paths["/users"].get.responses["200"]
+  dbml:
+    - ./schema.dbml#tables["users"]
+usecase:
+  name: テスト
+  response_mapping:
+    - field: id
+      source: users.id
+  transforms:
+    - target: id
+      type: CONDITIONAL_SOURCE
+      condition:
+        - param: undeclared_param
+          operator: "="
+          value: "active"
+      then_source: users.id
+      else_source: users.name
+"#;
+        let doc = parser::parse(yaml).unwrap();
+        let mut errors = Vec::new();
+        validate_transform_params(&doc.usecase.transforms, &openapi, &mut errors);
+        assert!(errors
+            .iter()
+            .any(|e| matches!(e, ValidationError::Rule(rule, _) if rule == "transforms.condition.param")));
     }
 }
