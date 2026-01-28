@@ -1,0 +1,84 @@
+version: "0.1"
+
+import:
+  openapi: ./api.yaml#paths["/posts/{post_id}"].get.responses["200"]
+  dbml:
+    - ./schema.dbml#tables["posts"]
+    - ./schema.dbml#tables["users"]
+    - ./schema.dbml#tables["comments"]
+    - ./schema.dbml#tables["likes"]
+    - ./schema.dbml#tables["tags"]
+    - ./schema.dbml#tables["post_tags"]
+
+usecase:
+  name: 投稿詳細取得
+  summary: 投稿本文・著者・コメント・いいねCount・タグを返す
+
+  response_mapping:
+    - field: id
+      source: posts.id
+    - field: title
+      source: posts.title
+    - field: body
+      source: posts.body
+    - field: author_name
+      source: users.name
+      join:
+        table: users
+        on: posts.user_id = users.id
+    - field: like_count
+      source: likes.id
+      join:
+        table: likes
+        on: posts.id = likes.post_id
+      aggregate:
+        type: COUNT
+        group_by: posts.id
+    - field: tags
+      type: array
+      source_table: tags
+      join:
+        table: post_tags
+        on: posts.id = post_tags.post_id
+      join_chain:
+        - table: tags
+          on: post_tags.tag_id = tags.id
+      fields:
+        - field: id
+          source: tags.id
+        - field: name
+          source: tags.name
+    - field: comments
+      type: array
+      source_table: comments
+      join:
+        table: comments
+        on: posts.id = comments.post_id
+      fields:
+        - field: id
+          source: comments.id
+        - field: body
+          source: comments.body
+        - field: author_name
+          source: comment_author.name
+          join:
+            table: users
+            alias: comment_author
+            on: comments.user_id = comment_author.id
+        - field: created_at
+          source: comments.created_at
+
+  filters:
+    - param: post_id
+      maps_to: WHERE
+      condition: posts.id = :post_id
+
+  transforms:
+    - target: comments.body
+      type: MASK
+      source: comments.body
+      mask_pattern: ""
+      when:
+        - source: posts.status
+          operator: "=="
+          value: "draft"

@@ -1,0 +1,13 @@
+[package]
+name = "usml_cli"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "usml"
+path = "src/main.rs"
+
+[dependencies]
+usml_core = { path = "../core" }
+clap = { workspace = true }
+serde_yaml = { workspace = true }

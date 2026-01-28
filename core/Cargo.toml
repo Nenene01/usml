@@ -1,0 +1,12 @@
+[package]
+name = "usml_core"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "usml_core"
+
+[dependencies]
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }

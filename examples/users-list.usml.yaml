@@ -1,0 +1,42 @@
+version: "0.1"
+
+import:
+  openapi: ./api.yaml#paths["/users"].get.responses["200"]
+  dbml:
+    - ./schema.dbml#tables["users"]
+    - ./schema.dbml#tables["profiles"]
+
+usecase:
+  name: ユーザー一覧取得
+  summary: ページネーション付きのユーザー一覧を返す
+
+  response_mapping:
+    - field: id
+      source: users.id
+    - field: name
+      source: users.name
+    - field: email
+      source: users.email
+    - field: avatar_url
+      source: profiles.avatar_url
+      join:
+        table: profiles
+        on: users.id = profiles.user_id
+    - field: display_name
+      source: profiles.display_name
+
+  filters:
+    - param: status
+      maps_to: WHERE
+      condition: users.status = :status
+    - param: page
+      maps_to: PAGINATION
+      strategy: offset
+      page_size: 20
+
+  transforms:
+    - target: display_name
+      type: COALESCE
+      sources:
+        - profiles.display_name
+        - users.name
