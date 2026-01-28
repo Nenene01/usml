@@ -9,6 +9,8 @@ struct FieldEntry {
     join_lines: Vec<String>,
     transforms: Vec<String>,
     depth: usize,
+    tables: Vec<String>,
+    join_type: String,
 }
 
 pub fn generate_html(doc: &UsmlDocument) -> String {
@@ -63,6 +65,17 @@ pub fn generate_html(doc: &UsmlDocument) -> String {
     html.push_str(".depth-2 { margin-left: 24px; }\n");
     html.push_str(".depth-3 { margin-left: 36px; }\n");
     html.push_str(".depth-4 { margin-left: 48px; }\n");
+    html.push_str("#flow-container { position: relative; }\n");
+    html.push_str("#flow-svg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }\n");
+    html.push_str(".arrow-simple { stroke: #9ca3af; }\n");
+    html.push_str(".arrow-join { stroke: #d4a017; }\n");
+    html.push_str(".arrow-join-chain { stroke: #3b82f6; }\n");
+    html.push_str(".arrow-aggregate { stroke: #8b5cf6; }\n");
+    html.push_str(".card { transition: box-shadow 0.2s ease, transform 0.15s ease; }\n");
+    html.push_str(".card.highlighted { box-shadow: 0 0 16px rgba(59,130,246,0.4); transform: scale(1.02); }\n");
+    html.push_str(".legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 20px; padding: 12px 16px; background: #fff; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); }\n");
+    html.push_str(".legend-item { display: flex; align-items: center; gap: 6px; font-size: 0.85rem; }\n");
+    html.push_str(".legend-line { width: 28px; height: 3px; border-radius: 2px; }\n");
     html.push_str("</style>\n</head>\n<body>\n");
 
     write!(
@@ -79,7 +92,8 @@ pub fn generate_html(doc: &UsmlDocument) -> String {
         )
         .unwrap();
     }
-    html.push_str("<div class=\"grid\">\n");
+    html.push_str("<div class=\"grid\" id=\"flow-container\">\n");
+    html.push_str("<svg id=\"flow-svg\" xmlns=\"http://www.w3.org/2000/svg\"></svg>\n");
 
     html.push_str("<div class=\"column\">\n<h2>Response Fields</h2>\n");
     if entries.is_empty() {
@@ -89,8 +103,11 @@ pub fn generate_html(doc: &UsmlDocument) -> String {
             let depth_class = depth_class(entry.depth);
             write!(
                 &mut html,
-                "<div class=\"card response-card{}\">",
-                depth_class
+                "<div class=\"card response-card{}\" data-field=\"{}\" data-tables=\"{}\" data-join-type=\"{}\">",
+                depth_class,
+                escape_html(&entry.field),
+                escape_html(&entry.tables.join(",")),
+                escape_html(&entry.join_type)
             )
             .unwrap();
             write!(
@@ -124,8 +141,9 @@ pub fn generate_html(doc: &UsmlDocument) -> String {
             let depth_class = depth_class(entry.depth);
             write!(
                 &mut html,
-                "<div class=\"card join-card{}\">",
-                depth_class
+                "<div class=\"card join-card{}\" data-field=\"{}\">",
+                depth_class,
+                escape_html(&entry.field)
             )
             .unwrap();
             write!(
@@ -172,7 +190,8 @@ pub fn generate_html(doc: &UsmlDocument) -> String {
             let count = table_counts.get(table).copied().unwrap_or(0);
             write!(
                 &mut html,
-                "<div class=\"card table-card\"><div class=\"field-name\">{}</div><div class=\"join-line\">Referenced by {} field{}</div></div>\n",
+                "<div class=\"card table-card\" data-table=\"{}\"><div class=\"field-name\">{}</div><div class=\"join-line\">Referenced by {} field{}</div></div>\n",
+                escape_html(table),
                 escape_html(table),
                 count,
                 if count == 1 { "" } else { "s" }
@@ -180,7 +199,97 @@ pub fn generate_html(doc: &UsmlDocument) -> String {
             .unwrap();
         }
     }
-    html.push_str("</div>\n</div>\n</div>\n</body>\n</html>\n");
+    html.push_str("</div>\n</div>\n");
+    // Legend
+    html.push_str("<div class=\"legend\">\n");
+    html.push_str("<div class=\"legend-item\"><div class=\"legend-line\" style=\"background:#9ca3af\"></div>Simple</div>\n");
+    html.push_str("<div class=\"legend-item\"><div class=\"legend-line\" style=\"background:#d4a017\"></div>JOIN</div>\n");
+    html.push_str("<div class=\"legend-item\"><div class=\"legend-line\" style=\"background:#3b82f6\"></div>JOIN Chain</div>\n");
+    html.push_str("<div class=\"legend-item\"><div class=\"legend-line\" style=\"background:#8b5cf6\"></div>Aggregate</div>\n");
+    html.push_str("</div>\n");
+    html.push_str("</div>\n");
+    // JavaScript for SVG flow lines and hover highlighting
+    html.push_str(r#"<script>
+(function() {
+  function drawFlows() {
+    var container = document.getElementById('flow-container');
+    var svg = document.getElementById('flow-svg');
+    if (!container || !svg) return;
+    svg.innerHTML = '';
+    var containerRect = container.getBoundingClientRect();
+    document.querySelectorAll('.response-card[data-tables]').forEach(function(card) {
+      var tables = card.dataset.tables.split(',').filter(function(t) { return t.length > 0; });
+      var joinType = card.dataset.joinType || 'simple';
+      var cardRect = card.getBoundingClientRect();
+      tables.forEach(function(tableName) {
+        var tableCard = document.querySelector('.table-card[data-table="' + tableName + '"]');
+        if (!tableCard) return;
+        var tableRect = tableCard.getBoundingClientRect();
+        var x1 = cardRect.right - containerRect.left;
+        var y1 = cardRect.top + cardRect.height / 2 - containerRect.top;
+        var x2 = tableRect.left - containerRect.left;
+        var y2 = tableRect.top + tableRect.height / 2 - containerRect.top;
+        var midX = (x1 + x2) / 2;
+        var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', 'M ' + x1 + ' ' + y1 + ' C ' + midX + ' ' + y1 + ', ' + midX + ' ' + y2 + ', ' + x2 + ' ' + y2);
+        path.setAttribute('fill', 'none');
+        path.setAttribute('stroke-width', '2');
+        path.setAttribute('class', 'arrow-' + joinType);
+        path.setAttribute('data-field', card.dataset.field);
+        path.setAttribute('data-table', tableName);
+        var colors = { 'simple': '#9ca3af', 'join': '#d4a017', 'join-chain': '#3b82f6', 'aggregate': '#8b5cf6' };
+        var color = colors[joinType] || '#9ca3af';
+        var markerId = 'arrow-' + joinType;
+        var defs = svg.querySelector('defs');
+        if (!defs) { defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs'); svg.insertBefore(defs, svg.firstChild); }
+        if (!defs.querySelector('#' + markerId)) {
+          var marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+          marker.setAttribute('id', markerId);
+          marker.setAttribute('viewBox', '0 0 10 10');
+          marker.setAttribute('refX', '9');
+          marker.setAttribute('refY', '5');
+          marker.setAttribute('markerWidth', '6');
+          marker.setAttribute('markerHeight', '6');
+          marker.setAttribute('orient', 'auto-start-reverse');
+          var markerPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          markerPath.setAttribute('d', 'M 0 0 L 10 5 L 0 10 z');
+          markerPath.setAttribute('fill', color);
+          marker.appendChild(markerPath);
+          defs.appendChild(marker);
+        }
+        path.setAttribute('marker-end', 'url(#' + markerId + ')');
+        svg.appendChild(path);
+      });
+    });
+  }
+  function setupHover() {
+    document.querySelectorAll('.response-card[data-field]').forEach(function(card) {
+      card.addEventListener('mouseenter', function() {
+        var field = card.dataset.field;
+        var tables = (card.dataset.tables || '').split(',').filter(function(t) { return t.length > 0; });
+        card.classList.add('highlighted');
+        document.querySelectorAll('.join-card[data-field="' + field + '"]').forEach(function(c) { c.classList.add('highlighted'); });
+        tables.forEach(function(t) {
+          var tc = document.querySelector('.table-card[data-table="' + t + '"]');
+          if (tc) tc.classList.add('highlighted');
+        });
+        document.querySelectorAll('#flow-svg path[data-field="' + field + '"]').forEach(function(p) {
+          p.setAttribute('stroke-width', '4');
+          p.style.filter = 'drop-shadow(0 0 4px currentColor)';
+        });
+      });
+      card.addEventListener('mouseleave', function() {
+        document.querySelectorAll('.card').forEach(function(c) { c.classList.remove('highlighted'); });
+        document.querySelectorAll('#flow-svg path').forEach(function(p) { p.setAttribute('stroke-width', '2'); p.style.filter = ''; });
+      });
+    });
+  }
+  window.addEventListener('load', function() { drawFlows(); setupHover(); });
+  window.addEventListener('resize', drawFlows);
+})();
+</script>
+"#);
+    html.push_str("</body>\n</html>\n");
     html
 }
 
@@ -270,12 +379,45 @@ fn collect_entries(
             .cloned()
             .unwrap_or_default();
 
+        let join_type = if mapping.aggregate.is_some() {
+            "aggregate".to_string()
+        } else if mapping.join_chain.is_some() {
+            "join-chain".to_string()
+        } else if mapping.join.is_some() {
+            "join".to_string()
+        } else {
+            "simple".to_string()
+        };
+
+        let mut field_tables: Vec<String> = Vec::new();
+        if let Some(source) = &mapping.source {
+            if let Some(table) = extract_table_identifier(source) {
+                if !field_tables.contains(&table) {
+                    field_tables.push(table);
+                }
+            }
+        }
+        if let Some(join) = &mapping.join {
+            if !field_tables.contains(&join.table) {
+                field_tables.push(join.table.clone());
+            }
+        }
+        if let Some(chain) = &mapping.join_chain {
+            for entry in chain {
+                if !field_tables.contains(&entry.table) {
+                    field_tables.push(entry.table.clone());
+                }
+            }
+        }
+
         entries.push(FieldEntry {
             field: mapping.field.clone(),
             badges,
             join_lines,
             transforms,
             depth,
+            tables: field_tables,
+            join_type,
         });
 
         let mut tables_for_field = HashSet::new();
@@ -434,5 +576,39 @@ mod tests {
         assert!(html.contains("array"));
         assert!(html.contains("COALESCE"));
         assert!(html.contains("profiles"));
+    }
+
+    #[test]
+    fn test_generate_html_has_flow_svg_and_legend() {
+        let doc = UsmlDocument {
+            version: "0.1".to_string(),
+            import: Import {
+                openapi: None,
+                dbml: Some(vec!["./schema.dbml#tables[\"users\"]".to_string()]),
+            },
+            usecase: Usecase {
+                name: "Flow Test".to_string(),
+                summary: None,
+                response_mapping: vec![ResponseMapping {
+                    field: "name".to_string(),
+                    source: Some("users.name".to_string()),
+                    r#type: None,
+                    source_table: None,
+                    join: None,
+                    join_chain: None,
+                    aggregate: None,
+                    fields: None,
+                }],
+                filters: Vec::new(),
+                transforms: Vec::new(),
+            },
+        };
+        let html = generate_html(&doc);
+        assert!(html.contains("flow-svg"), "SVG overlay missing");
+        assert!(html.contains("flow-container"), "flow-container missing");
+        assert!(html.contains("legend"), "legend missing");
+        assert!(html.contains("data-field=\"name\""), "data-field missing");
+        assert!(html.contains("data-table=\"users\""), "data-table missing");
+        assert!(html.contains("drawFlows"), "JavaScript missing");
     }
 }
