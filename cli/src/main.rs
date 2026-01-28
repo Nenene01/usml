@@ -1,4 +1,4 @@
-use clap::{Command, Arg};
+use clap::{Arg, ArgAction, Command};
 use std::fs;
 use std::process;
 
@@ -16,6 +16,12 @@ fn main() {
                         .help("検証対象の .usml.yaml ファイルパス")
                         .required(true)
                         .index(1),
+                )
+                .arg(
+                    Arg::new("json")
+                        .help("JSON形式で結果を出力する")
+                        .long("json")
+                        .action(ArgAction::SetTrue),
                 ),
         )
         .subcommand(
@@ -49,7 +55,8 @@ fn main() {
     match matches.subcommand() {
         Some(("validate", sub_matches)) => {
             let file_path = sub_matches.get_one::<String>("file").unwrap();
-            cmd_validate(file_path);
+            let json_output = sub_matches.get_flag("json");
+            cmd_validate(file_path, json_output);
         }
         Some(("parse", sub_matches)) => {
             let file_path = sub_matches.get_one::<String>("file").unwrap();
@@ -77,27 +84,81 @@ fn main() {
     }
 }
 
-fn cmd_validate(file_path: &str) {
+fn cmd_validate(file_path: &str, json_output: bool) {
     let input = read_file(file_path);
     let doc = match parser::parse(&input) {
         Ok(doc) => doc,
         Err(e) => {
-            eprintln!("パースエラー: {}", e);
+            if json_output {
+                println!(
+                    r#"{{"file":"{}","status":"error","diagnostics":[{{"severity":"error","rule":"parse","message":"{}"}}]}}"#,
+                    escape_json_string(file_path),
+                    escape_json_string(&e.to_string())
+                );
+            } else {
+                eprintln!("パースエラー: {}", e);
+            }
             process::exit(1);
         }
     };
 
     let errors = validator::validate(&doc);
 
-    if errors.is_empty() {
-        println!("✓ バリデーション成功: '{}'", file_path);
-    } else {
-        eprintln!("✗ バリデーションエラー: '{}' ({} 件)", file_path, errors.len());
-        for (i, err) in errors.iter().enumerate() {
-            eprintln!("  [{}] {}", i + 1, err);
+    if json_output {
+        let diagnostics: Vec<String> = errors
+            .iter()
+            .map(|err| match err {
+                validator::ValidationError::Rule(rule, msg) => format!(
+                    r#"{{"severity":"error","rule":"{}","message":"{}"}}"#,
+                    escape_json_string(rule),
+                    escape_json_string(msg)
+                ),
+                validator::ValidationError::Warning(rule, msg) => format!(
+                    r#"{{"severity":"warning","rule":"{}","message":"{}"}}"#,
+                    escape_json_string(rule),
+                    escape_json_string(msg)
+                ),
+            })
+            .collect();
+        let has_rule_error = errors
+            .iter()
+            .any(|err| matches!(err, validator::ValidationError::Rule(..)));
+        let status = if has_rule_error { "error" } else { "ok" };
+        println!(
+            r#"{{"file":"{}","status":"{}","diagnostics":[{}]}}"#,
+            escape_json_string(file_path),
+            status,
+            diagnostics.join(",")
+        );
+        if has_rule_error {
+            process::exit(1);
         }
-        process::exit(1);
+    } else {
+        if errors.is_empty() {
+            println!("✓ バリデーション成功: '{}'", file_path);
+        } else {
+            eprintln!("✗ バリデーションエラー: '{}' ({} 件)", file_path, errors.len());
+            for (i, err) in errors.iter().enumerate() {
+                eprintln!("  [{}] {}", i + 1, err);
+            }
+            process::exit(1);
+        }
     }
+}
+
+fn escape_json_string(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
 }
 
 fn cmd_parse(file_path: &str) {

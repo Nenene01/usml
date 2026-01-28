@@ -1,0 +1,58 @@
+{
+  "name": "usml-vscode",
+  "displayName": "USML - Usecase Markup Language",
+  "description": "OpenAPI と DBML の間のデータフロー定義语言 USML のサポート",
+  "version": "0.0.1",
+  "publisher": "nenene01",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Languages",
+    "Snippets"
+  ],
+  "activationEvents": [
+    "onLanguage:usml"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "usml",
+        "aliases": ["USML", "usml"],
+        "extensions": [".usml.yaml"],
+        "configuration": {
+          "editor.formatOnSave": true
+        }
+      }
+    ],
+    "commands": [
+      {
+        "command": "usml.preview",
+        "title": "USML: データフロー図を開く"
+      },
+      {
+        "command": "usml.validate",
+        "title": "USML: バリデーション実行"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "when": "resourceExtname == .yaml",
+          "group": "usml"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "USML",
+      "properties": {
+        "usml.binaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "usml バイナリのパス。空の場合はワークスペース内の target/debug/usml を使用"
+        }
+      }
+    }
+  }
+}
