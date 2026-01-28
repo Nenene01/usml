@@ -10,3 +10,5 @@ serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 thiserror = "1"
 clap = { version = "4", features = ["derive"] }
+openapi3-parser = "0.1"
+dbml-rs = "1.0"

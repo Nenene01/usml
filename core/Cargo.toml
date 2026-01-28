@@ -10,3 +10,5 @@ name = "usml_core"
 serde = { workspace = true }
 serde_yaml = { workspace = true }
 thiserror = { workspace = true }
+openapi3-parser = { workspace = true }
+dbml-rs = { workspace = true }
