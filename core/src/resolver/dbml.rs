@@ -4,8 +4,8 @@ use super::{DbmlTable, ResolverError};
 
 /// DBML ファイルを読み込み、テーブル・カラム情報を抽出する
 pub fn resolve_dbml(file_path: &str) -> Result<Vec<DbmlTable>, ResolverError> {
-    let content =
-        fs::read_to_string(file_path).map_err(|e| ResolverError::IoError(file_path.to_string(), e))?;
+    let content = fs::read_to_string(file_path)
+        .map_err(|e| ResolverError::IoError(file_path.to_string(), e))?;
 
     parse_dbml_content(&content, file_path)
 }
@@ -18,7 +18,11 @@ pub fn parse_dbml_content(content: &str, source: &str) -> Result<Vec<DbmlTable>,
     let mut tables = Vec::new();
 
     for table in ast.tables() {
-        let columns: Vec<String> = table.cols.iter().map(|c| c.name.to_string.clone()).collect();
+        let columns: Vec<String> = table
+            .cols
+            .iter()
+            .map(|c| c.name.to_string.clone())
+            .collect();
         tables.push(DbmlTable {
             name: table.ident.name.to_string.clone(),
             columns,
@@ -32,9 +36,7 @@ pub fn parse_dbml_content(content: &str, source: &str) -> Result<Vec<DbmlTable>,
 /// 例: `./schema.dbml#tables["users"]` → `("./schema.dbml", "users")`
 pub fn parse_dbml_ref(reference: &str) -> Option<(&str, &str)> {
     let (path, fragment) = reference.split_once('#')?;
-    let table_name = fragment
-        .strip_prefix("tables[\"")?
-        .strip_suffix("\"]")?;
+    let table_name = fragment.strip_prefix("tables[\"")?.strip_suffix("\"]")?;
     Some((path, table_name))
 }
 
@@ -51,8 +53,7 @@ mod tests {
 
     #[test]
     fn test_parse_dbml_ref_nested_path() {
-        let (path, table) =
-            parse_dbml_ref("../shared/db.dbml#tables[\"post_tags\"]").unwrap();
+        let (path, table) = parse_dbml_ref("../shared/db.dbml#tables[\"post_tags\"]").unwrap();
         assert_eq!(path, "../shared/db.dbml");
         assert_eq!(table, "post_tags");
     }

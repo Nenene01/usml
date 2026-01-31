@@ -119,7 +119,10 @@ usecase:
 "#;
         let doc = parse(yaml).expect("parse should succeed");
         let like_count = &doc.usecase.response_mapping[0];
-        let agg = like_count.aggregate.as_ref().expect("aggregate should exist");
+        let agg = like_count
+            .aggregate
+            .as_ref()
+            .expect("aggregate should exist");
         assert_eq!(agg.r#type, "COUNT");
         assert_eq!(agg.group_by.as_deref(), Some("posts.id"));
     }

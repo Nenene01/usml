@@ -2,9 +2,14 @@ use std::fs;
 
 use super::{OpenapiResponse, ResolverError};
 
-pub fn resolve_openapi(file_path: &str, path: &str, method: &str, status_code: &str) -> Result<OpenapiResponse, ResolverError> {
-    let content =
-        fs::read_to_string(file_path).map_err(|e| ResolverError::IoError(file_path.to_string(), e))?;
+pub fn resolve_openapi(
+    file_path: &str,
+    path: &str,
+    method: &str,
+    status_code: &str,
+) -> Result<OpenapiResponse, ResolverError> {
+    let content = fs::read_to_string(file_path)
+        .map_err(|e| ResolverError::IoError(file_path.to_string(), e))?;
 
     parse_openapi_content(&content, file_path, path, method, status_code)
 }
@@ -20,14 +25,12 @@ pub fn parse_openapi_content(
         .map_err(|e| ResolverError::OpenapiParseError(source.to_string(), format!("{}", e)))?;
 
     let paths = spec.paths.as_ref().ok_or_else(|| {
-        ResolverError::NotFound(format!("OpenAPI に paths が定義されていません"))
+        ResolverError::NotFound("OpenAPI に paths が定義されていません".to_string())
     })?;
 
     let path_item = paths
         .get(path)
-        .ok_or_else(|| {
-            ResolverError::NotFound(format!("パス {} が見つかりません", path))
-        })?;
+        .ok_or_else(|| ResolverError::NotFound(format!("パス {} が見つかりません", path)))?;
 
     let operation = match method {
         "get" => &path_item.get,
@@ -53,12 +56,7 @@ pub fn parse_openapi_content(
     let parameters: Vec<String> = operation
         .parameters
         .as_ref()
-        .map(|params| {
-            params
-                .iter()
-                .filter_map(|p| p.name.clone())
-                .collect()
-        })
+        .map(|params| params.iter().filter_map(|p| p.name.clone()).collect())
         .unwrap_or_default();
 
     let responses = operation.responses.as_ref().ok_or_else(|| {
@@ -75,41 +73,34 @@ pub fn parse_openapi_content(
         ))
     })?;
 
-    let response = response_map
-        .get(status_code)
-        .ok_or_else(|| {
-            ResolverError::NotFound(format!(
-                "パス {} .{} のレスポンス {} が見つかりません",
-                path, method, status_code
-            ))
-        })?;
+    let response = response_map.get(status_code).ok_or_else(|| {
+        ResolverError::NotFound(format!(
+            "パス {} .{} のレスポンス {} が見つかりません",
+            path, method, status_code
+        ))
+    })?;
 
     let fields = extract_response_fields(response);
 
-    Ok(OpenapiResponse {
-        fields,
-        parameters,
-    })
+    Ok(OpenapiResponse { fields, parameters })
 }
 
 fn extract_response_fields(response: &openapi3_parser::open_api::Response) -> Vec<String> {
-    if let Some(content) = &response.content {
-        if let Some(media_type) = content.get("application/json") {
-            if let Some(schema) = &media_type.schema {
-                return extract_fields_from_schema(schema);
-            }
-        }
+    if let Some(content) = &response.content
+        && let Some(media_type) = content.get("application/json")
+        && let Some(schema) = &media_type.schema
+    {
+        return extract_fields_from_schema(schema);
     }
     Vec::new()
 }
 
 fn extract_fields_from_schema(schema: &openapi3_parser::open_api::Schema) -> Vec<String> {
-    if let Some(type_str) = &schema.type_ {
-        if type_str == "object" {
-            if let Some(props) = &schema.properties {
-                return props.keys().cloned().collect();
-            }
-        }
+    if let Some(type_str) = &schema.type_
+        && type_str == "object"
+        && let Some(props) = &schema.properties
+    {
+        return props.keys().cloned().collect();
     }
     Vec::new()
 }
@@ -139,10 +130,9 @@ mod tests {
 
     #[test]
     fn test_parse_openapi_ref_with_path_param() {
-        let (file, path, method, status) = parse_openapi_ref(
-            "./api.yaml#paths[\"/posts/{post_id}\"].get.responses[\"200\"]",
-        )
-        .unwrap();
+        let (file, path, method, status) =
+            parse_openapi_ref("./api.yaml#paths[\"/posts/{post_id}\"].get.responses[\"200\"]")
+                .unwrap();
         assert_eq!(file, "./api.yaml");
         assert_eq!(path, "/posts/{post_id}");
         assert_eq!(method, "get");
@@ -191,8 +181,7 @@ paths:
                   email:
                     type: string
 "#;
-        let result =
-            parse_openapi_content(yaml, "test.yaml", "/users", "get", "200").unwrap();
+        let result = parse_openapi_content(yaml, "test.yaml", "/users", "get", "200").unwrap();
         assert_eq!(result.parameters.len(), 2);
         assert!(result.parameters.contains(&"status".to_string()));
         assert!(result.parameters.contains(&"page".to_string()));
@@ -216,8 +205,7 @@ paths:
         "200":
           description: OK
 "#;
-        let result =
-            parse_openapi_content(yaml, "test.yaml", "/posts", "get", "200");
+        let result = parse_openapi_content(yaml, "test.yaml", "/posts", "get", "200");
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), ResolverError::NotFound(_)));
     }

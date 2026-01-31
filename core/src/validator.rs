@@ -42,16 +42,17 @@ fn resolve_imports(doc: &UsmlDocument, base_dir: &str) -> (ResolveContext, Vec<V
     };
 
     // OpenAPI 解決
-    if let Some(openapi_ref) = &doc.import.openapi {
-        if let Some((file, path, method, status)) = resolver::openapi::parse_openapi_ref(openapi_ref) {
-            let full_path = Path::new(base_dir).join(file).to_string_lossy().to_string();
-            match resolver::openapi::resolve_openapi(&full_path, path, method, status) {
-                Ok(resp) => ctx.openapi = Some(resp),
-                Err(e) => errors.push(ValidationError::Warning(
-                    "import.openapi".to_string(),
-                    format!("OpenAPI解決に失敗しました: {}", e),
-                )),
-            }
+    if let Some(openapi_ref) = &doc.import.openapi
+        && let Some((file, path, method, status)) =
+            resolver::openapi::parse_openapi_ref(openapi_ref)
+    {
+        let full_path = Path::new(base_dir).join(file).to_string_lossy().to_string();
+        match resolver::openapi::resolve_openapi(&full_path, path, method, status) {
+            Ok(resp) => ctx.openapi = Some(resp),
+            Err(e) => errors.push(ValidationError::Warning(
+                "import.openapi".to_string(),
+                format!("OpenAPI解決に失敗しました: {}", e),
+            )),
         }
     }
 
@@ -131,10 +132,12 @@ fn extract_table_refs(on_expr: &str) -> Vec<(String, String)> {
     let mut refs = Vec::new();
     for token in on_expr.split_whitespace() {
         let clean = token.trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != '_');
-        if let Some((table, col)) = clean.split_once('.') {
-            if !table.is_empty() && !col.is_empty() && col.chars().all(|c| c.is_alphanumeric() || c == '_') {
-                refs.push((table.to_string(), col.to_string()));
-            }
+        if let Some((table, col)) = clean.split_once('.')
+            && !table.is_empty()
+            && !col.is_empty()
+            && col.chars().all(|c| c.is_alphanumeric() || c == '_')
+        {
+            refs.push((table.to_string(), col.to_string()));
         }
     }
     refs
@@ -197,10 +200,10 @@ fn validate_response_mapping_inner(
             let refs = extract_table_refs(&join.on);
             for (table, _col) in &refs {
                 // エイリアス名は検証対象外
-                if let Some(alias) = &join.alias {
-                    if table == alias {
-                        continue;
-                    }
+                if let Some(alias) = &join.alias
+                    && table == alias
+                {
+                    continue;
                 }
                 if !imported_tables.contains(table) {
                     errors.push(ValidationError::Rule(
@@ -233,36 +236,39 @@ fn validate_response_mapping_inner(
         }
 
         // Rule 8: aggregate を使用するフィールドに group_by が明示されているか（警告）
-        if let Some(agg) = &mapping.aggregate {
-            if agg.group_by.is_none() {
-                errors.push(ValidationError::Warning(
-                    "aggregate.group_by".to_string(),
-                    format!(
-                        "フィールド '{}' に aggregate ({}) が使われていますが group_by が指定されていません。省略時はルートテーブルの主キーが自動適用されます",
-                        mapping.field, agg.r#type
-                    ),
-                ));
-            }
+        if let Some(agg) = &mapping.aggregate
+            && agg.group_by.is_none()
+        {
+            errors.push(ValidationError::Warning(
+                "aggregate.group_by".to_string(),
+                format!(
+                    "フィールド '{}' に aggregate ({}) が使われていますが group_by が指定されていません。省略時はルートテーブルの主キーが自動適用されます",
+                    mapping.field, agg.r#type
+                ),
+            ));
         }
 
         // Rule 11: source_table が配列フィールドの join で参照されるテーブルと一致するか
-        if mapping.r#type.as_deref() == Some("array") {
-            if let (Some(source_table), Some(join)) = (&mapping.source_table, &mapping.join) {
-                // join_chain がある場合は最後のテーブルが実際のソース
-                let actual_source = if let Some(chain) = &mapping.join_chain {
-                    chain.last().map(|e| e.table.as_str()).unwrap_or(&join.table)
-                } else {
-                    &join.table
-                };
-                if source_table != actual_source {
-                    errors.push(ValidationError::Rule(
-                        "source_table".to_string(),
-                        format!(
-                            "配列フィールド '{}' の source_table '{}' がjoin の実際のソーステーブル '{}' と一致しません",
-                            mapping.field, source_table, actual_source
-                        ),
-                    ));
-                }
+        if mapping.r#type.as_deref() == Some("array")
+            && let (Some(source_table), Some(join)) = (&mapping.source_table, &mapping.join)
+        {
+            // join_chain がある場合は最後のテーブルが実際のソース
+            let actual_source = if let Some(chain) = &mapping.join_chain {
+                chain
+                    .last()
+                    .map(|e| e.table.as_str())
+                    .unwrap_or(&join.table)
+            } else {
+                &join.table
+            };
+            if source_table != actual_source {
+                errors.push(ValidationError::Rule(
+                    "source_table".to_string(),
+                    format!(
+                        "配列フィールド '{}' の source_table '{}' がjoin の実際のソーステーブル '{}' と一致しません",
+                        mapping.field, source_table, actual_source
+                    ),
+                ));
             }
         }
 
@@ -287,7 +293,8 @@ fn validate_filters(doc: &UsmlDocument, errors: &mut Vec<ValidationError>) {
         if let Some(condition) = &filter.condition {
             for token in condition.split_whitespace() {
                 if let Some(param_name) = token.strip_prefix(':') {
-                    let clean = param_name.trim_end_matches(|c: char| !c.is_alphanumeric() && c != '_');
+                    let clean =
+                        param_name.trim_end_matches(|c: char| !c.is_alphanumeric() && c != '_');
                     if !clean.is_empty() && !declared_params.contains(&clean) {
                         errors.push(ValidationError::Rule(
                             "filters.condition".to_string(),
@@ -302,18 +309,18 @@ fn validate_filters(doc: &UsmlDocument, errors: &mut Vec<ValidationError>) {
         }
 
         // Rule 12: allowed_columns がある場合、default_column がリスト内にあるか
-        if filter.maps_to == "ORDER_BY" {
-            if let (Some(allowed), Some(default_col)) = (&filter.allowed_columns, &filter.default_column) {
-                if !allowed.contains(default_col) {
-                    errors.push(ValidationError::Rule(
-                        "filters.allowed_columns".to_string(),
-                        format!(
-                            "ORDER_BY の default_column '{}' が allowed_columns リスト外です",
-                            default_col
-                        ),
-                    ));
-                }
-            }
+        if filter.maps_to == "ORDER_BY"
+            && let (Some(allowed), Some(default_col)) =
+                (&filter.allowed_columns, &filter.default_column)
+            && !allowed.contains(default_col)
+        {
+            errors.push(ValidationError::Rule(
+                "filters.allowed_columns".to_string(),
+                format!(
+                    "ORDER_BY の default_column '{}' が allowed_columns リスト外です",
+                    default_col
+                ),
+            ));
         }
     }
 }
@@ -382,20 +389,18 @@ fn validate_dbml_columns(
     errors: &mut Vec<ValidationError>,
 ) {
     for mapping in mappings {
-        if let Some(source) = &mapping.source {
-            if let Some((table_name, col_name)) = source.split_once('.') {
-                if let Some(table) = dbml_tables.iter().find(|t| t.name == table_name) {
-                    if !table.columns.contains(&col_name.to_string()) {
-                        errors.push(ValidationError::Rule(
-                            "response_mapping.source".to_string(),
-                            format!(
-                                "カラム {} がテーブル {} に存在しません",
-                                col_name, table_name
-                            ),
-                        ));
-                    }
-                }
-            }
+        if let Some(source) = &mapping.source
+            && let Some((table_name, col_name)) = source.split_once('.')
+            && let Some(table) = dbml_tables.iter().find(|t| t.name == table_name)
+            && !table.columns.contains(&col_name.to_string())
+        {
+            errors.push(ValidationError::Rule(
+                "response_mapping.source".to_string(),
+                format!(
+                    "カラム {} がテーブル {} に存在しません",
+                    col_name, table_name
+                ),
+            ));
         }
 
         // サブフィールドの再帰検証
@@ -414,16 +419,16 @@ fn validate_transform_params(
     for transform in transforms {
         if let Some(conditions) = &transform.condition {
             for cond in conditions {
-                if let Some(param) = &cond.param {
-                    if !openapi.parameters.contains(param) {
-                        errors.push(ValidationError::Rule(
-                            "transforms.condition.param".to_string(),
-                            format!(
-                                "transform {} の condition.param {} がOpenAPIパラメータに存在しません",
-                                transform.target, param
-                            ),
-                        ));
-                    }
+                if let Some(param) = &cond.param
+                    && !openapi.parameters.contains(param)
+                {
+                    errors.push(ValidationError::Rule(
+                        "transforms.condition.param".to_string(),
+                        format!(
+                            "transform {} の condition.param {} がOpenAPIパラメータに存在しません",
+                            transform.target, param
+                        ),
+                    ));
                 }
             }
         }
@@ -435,18 +440,17 @@ fn collect_used_tables(mappings: &[ResponseMapping]) -> Vec<String> {
     let mut tables = Vec::new();
 
     for mapping in mappings {
-        if let Some(source) = &mapping.source {
-            if let Some(table) = source.split('.').next() {
-                if !tables.contains(&table.to_string()) {
-                    tables.push(table.to_string());
-                }
-            }
+        if let Some(source) = &mapping.source
+            && let Some(table) = source.split('.').next()
+            && !tables.contains(&table.to_string())
+        {
+            tables.push(table.to_string());
         }
 
-        if let Some(join) = &mapping.join {
-            if !tables.contains(&join.table) {
-                tables.push(join.table.clone());
-            }
+        if let Some(join) = &mapping.join
+            && !tables.contains(&join.table)
+        {
+            tables.push(join.table.clone());
         }
 
         if let Some(chain) = &mapping.join_chain {
@@ -503,8 +507,15 @@ usecase:
 "#;
         let doc = parser::parse(yaml).unwrap();
         let errors = validate(&doc);
-        let hard_errors: Vec<_> = errors.iter().filter(|e| matches!(e, ValidationError::Rule(..))  ).collect();
-        assert!(hard_errors.is_empty(), "エラーがありました: {:?}", hard_errors);
+        let hard_errors: Vec<_> = errors
+            .iter()
+            .filter(|e| matches!(e, ValidationError::Rule(..)))
+            .collect();
+        assert!(
+            hard_errors.is_empty(),
+            "エラーがありました: {:?}",
+            hard_errors
+        );
     }
 
     #[test]
@@ -526,9 +537,11 @@ usecase:
 "#;
         let doc = parser::parse(yaml).unwrap();
         let errors = validate(&doc);
-        assert!(errors
-            .iter()
-            .any(|e| matches!(e, ValidationError::Rule(rule, _) if rule == "import.dbml")));
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, ValidationError::Rule(rule, _) if rule == "import.dbml"))
+        );
     }
 
     #[test]
@@ -556,9 +569,11 @@ usecase:
 "#;
         let doc = parser::parse(yaml).unwrap();
         let errors = validate(&doc);
-        assert!(errors
-            .iter()
-            .any(|e| matches!(e, ValidationError::Rule(rule, _) if rule == "join.alias")));
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, ValidationError::Rule(rule, _) if rule == "join.alias"))
+        );
     }
 
     #[test]
@@ -636,9 +651,9 @@ usecase:
 "#;
         let doc = parser::parse(yaml).unwrap();
         let errors = validate(&doc);
-        assert!(errors
-            .iter()
-            .any(|e| matches!(e, ValidationError::Warning(rule, _) if rule == "aggregate.group_by")));
+        assert!(errors.iter().any(
+            |e| matches!(e, ValidationError::Warning(rule, _) if rule == "aggregate.group_by")
+        ));
     }
 
     // --- 新規テスト: Rule 9 ---
@@ -663,9 +678,11 @@ usecase:
         let doc = parser::parse(yaml).unwrap();
         let errors = validate(&doc);
         // :role は filters[].param に宣言されていないため Rule 9 が発火
-        assert!(errors
-            .iter()
-            .any(|e| matches!(e, ValidationError::Rule(rule, _) if rule == "filters.condition")));
+        assert!(
+            errors.iter().any(
+                |e| matches!(e, ValidationError::Rule(rule, _) if rule == "filters.condition")
+            )
+        );
     }
 
     // --- 新規テスト: Rule 11 ---
@@ -693,9 +710,11 @@ usecase:
 "#;
         let doc = parser::parse(yaml).unwrap();
         let errors = validate(&doc);
-        assert!(errors
-            .iter()
-            .any(|e| matches!(e, ValidationError::Rule(rule, _) if rule == "source_table")));
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, ValidationError::Rule(rule, _) if rule == "source_table"))
+        );
     }
 
     // --- 新規テスト: Rule 12 ---
@@ -722,9 +741,9 @@ usecase:
 "#;
         let doc = parser::parse(yaml).unwrap();
         let errors = validate(&doc);
-        assert!(errors
-            .iter()
-            .any(|e| matches!(e, ValidationError::Rule(rule, _) if rule == "filters.allowed_columns")));
+        assert!(errors.iter().any(
+            |e| matches!(e, ValidationError::Rule(rule, _) if rule == "filters.allowed_columns")
+        ));
     }
 
     // --- 新規テスト: Rule 11 with join_chain ---
@@ -757,8 +776,15 @@ usecase:
         let doc = parser::parse(yaml).unwrap();
         let errors = validate(&doc);
         // source_table: tags と join_chain の最後のテーブル tags が一致するのでエラーなし
-        let hard_errors: Vec<_> = errors.iter().filter(|e| matches!(e, ValidationError::Rule(..))).collect();
-        assert!(hard_errors.is_empty(), "エラーがありました: {:?}", hard_errors);
+        let hard_errors: Vec<_> = errors
+            .iter()
+            .filter(|e| matches!(e, ValidationError::Rule(..)))
+            .collect();
+        assert!(
+            hard_errors.is_empty(),
+            "エラーがありました: {:?}",
+            hard_errors
+        );
     }
 
     #[test]
@@ -784,9 +810,9 @@ usecase:
         let mappings = &doc.usecase.response_mapping;
         let mut errors = Vec::new();
         validate_openapi_fields(mappings, &openapi, &mut errors);
-        assert!(errors
-            .iter()
-            .any(|e| matches!(e, ValidationError::Rule(rule, _) if rule == "response_mapping.field")));
+        assert!(errors.iter().any(
+            |e| matches!(e, ValidationError::Rule(rule, _) if rule == "response_mapping.field")
+        ));
     }
 
     #[test]
@@ -811,9 +837,9 @@ usecase:
         let mappings = &doc.usecase.response_mapping;
         let mut errors = Vec::new();
         validate_dbml_columns(mappings, &tables, &mut errors);
-        assert!(errors
-            .iter()
-            .any(|e| matches!(e, ValidationError::Rule(rule, _) if rule == "response_mapping.source")));
+        assert!(errors.iter().any(
+            |e| matches!(e, ValidationError::Rule(rule, _) if rule == "response_mapping.source")
+        ));
     }
 
     #[test]
@@ -846,8 +872,8 @@ usecase:
         let doc = parser::parse(yaml).unwrap();
         let mut errors = Vec::new();
         validate_transform_params(&doc.usecase.transforms, &openapi, &mut errors);
-        assert!(errors
-            .iter()
-            .any(|e| matches!(e, ValidationError::Rule(rule, _) if rule == "transforms.condition.param")));
+        assert!(errors.iter().any(
+            |e| matches!(e, ValidationError::Rule(rule, _) if rule == "transforms.condition.param")
+        ));
     }
 }

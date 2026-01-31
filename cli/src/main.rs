@@ -72,8 +72,12 @@ fn main() {
             Command::new("usml")
                 .about("Usecase Markup Language - API と DB のデータフローを声明的に定義する")
                 .version("0.1.0")
-                .subcommand(Command::new("validate").about("USML ファイルのバリデーションを実行する"))
-                .subcommand(Command::new("parse").about("USML ファイルをパースしてAST情報を出力する"))
+                .subcommand(
+                    Command::new("validate").about("USML ファイルのバリデーションを実行する"),
+                )
+                .subcommand(
+                    Command::new("parse").about("USML ファイルをパースしてAST情報を出力する"),
+                )
                 .subcommand(
                     Command::new("visualize")
                         .about("USML ドキュメントからHTMLデータフロー図を生成する"),
@@ -133,16 +137,18 @@ fn cmd_validate(file_path: &str, json_output: bool) {
         if has_rule_error {
             process::exit(1);
         }
+    } else if errors.is_empty() {
+        println!("✓ バリデーション成功: '{}'", file_path);
     } else {
-        if errors.is_empty() {
-            println!("✓ バリデーション成功: '{}'", file_path);
-        } else {
-            eprintln!("✗ バリデーションエラー: '{}' ({} 件)", file_path, errors.len());
-            for (i, err) in errors.iter().enumerate() {
-                eprintln!("  [{}] {}", i + 1, err);
-            }
-            process::exit(1);
+        eprintln!(
+            "✗ バリデーションエラー: '{}' ({} 件)",
+            file_path,
+            errors.len()
+        );
+        for (i, err) in errors.iter().enumerate() {
+            eprintln!("  [{}] {}", i + 1, err);
         }
+        process::exit(1);
     }
 }
 
@@ -176,7 +182,10 @@ fn cmd_parse(file_path: &str) {
     if let Some(summary) = &doc.usecase.summary {
         println!("サマリー: {}", summary);
     }
-    println!("レスポンスマッピング: {} フィールド", doc.usecase.response_mapping.len());
+    println!(
+        "レスポンスマッピング: {} フィールド",
+        doc.usecase.response_mapping.len()
+    );
     println!("フィルタ: {} 件", doc.usecase.filters.len());
     println!("トランスフォーム: {} 件", doc.usecase.transforms.len());
 
@@ -187,11 +196,7 @@ fn cmd_parse(file_path: &str) {
 fn print_mappings(mappings: &[usml_core::ast::ResponseMapping], indent: usize) {
     let prefix = "  ".repeat(indent);
     for mapping in mappings {
-        let source_str = mapping
-            .source
-            .as_ref()
-            .map(|s| s.as_str())
-            .unwrap_or("-");
+        let source_str = mapping.source.as_deref().unwrap_or("-");
         let type_str = mapping
             .r#type
             .as_ref()
@@ -205,7 +210,10 @@ fn print_mappings(mappings: &[usml_core::ast::ResponseMapping], indent: usize) {
                 .as_ref()
                 .map(|a| format!(" (alias: {})", a))
                 .unwrap_or_default();
-            println!("{}  └─ JOIN {} ON {}{}", prefix, join.table, join.on, alias_str);
+            println!(
+                "{}  └─ JOIN {} ON {}{}",
+                prefix, join.table, join.on, alias_str
+            );
         }
 
         if let Some(agg) = &mapping.aggregate {

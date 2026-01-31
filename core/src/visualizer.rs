@@ -74,7 +74,9 @@ pub fn generate_html(doc: &UsmlDocument) -> String {
     html.push_str(".card { transition: box-shadow 0.2s ease, transform 0.15s ease; }\n");
     html.push_str(".card.highlighted { box-shadow: 0 0 16px rgba(59,130,246,0.4); transform: scale(1.02); }\n");
     html.push_str(".legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 20px; padding: 12px 16px; background: #fff; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); }\n");
-    html.push_str(".legend-item { display: flex; align-items: center; gap: 6px; font-size: 0.85rem; }\n");
+    html.push_str(
+        ".legend-item { display: flex; align-items: center; gap: 6px; font-size: 0.85rem; }\n",
+    );
     html.push_str(".legend-line { width: 28px; height: 3px; border-radius: 2px; }\n");
     html.push_str("</style>\n</head>\n<body>\n");
 
@@ -188,9 +190,9 @@ pub fn generate_html(doc: &UsmlDocument) -> String {
     } else {
         for table in &table_order {
             let count = table_counts.get(table).copied().unwrap_or(0);
-            write!(
+            writeln!(
                 &mut html,
-                "<div class=\"card table-card\" data-table=\"{}\"><div class=\"field-name\">{}</div><div class=\"join-line\">Referenced by {} field{}</div></div>\n",
+                "<div class=\"card table-card\" data-table=\"{}\"><div class=\"field-name\">{}</div><div class=\"join-line\">Referenced by {} field{}</div></div>",
                 escape_html(table),
                 escape_html(table),
                 count,
@@ -308,10 +310,10 @@ fn extract_import_tables(doc: &UsmlDocument) -> Vec<String> {
     let mut seen = HashSet::new();
     if let Some(dbmls) = &doc.import.dbml {
         for entry in dbmls {
-            if let Some(table) = extract_table_name(entry) {
-                if seen.insert(table.clone()) {
-                    tables.push(table);
-                }
+            if let Some(table) = extract_table_name(entry)
+                && seen.insert(table.clone())
+            {
+                tables.push(table);
             }
         }
     }
@@ -363,21 +365,16 @@ fn collect_entries(
             }
             join_lines.push(line);
         }
-        if let Some(chain) = &mapping.join_chain {
-            if !chain.is_empty() {
-                let chain_line = chain
-                    .iter()
-                    .map(|entry| format!("JOIN {} ON {}", entry.table, entry.on))
-                    .collect::<Vec<_>>()
-                    .join(" → ");
-                join_lines.push(chain_line);
-            }
+        if let Some(chain) = &mapping.join_chain
+            && !chain.is_empty()
+        {
+            let chain_line = chain
+                .iter()
+                .map(|entry| format!("JOIN {} ON {}", entry.table, entry.on))
+                .collect::<Vec<_>>()
+                .join(" → ");
+            join_lines.push(chain_line);
         }
-
-        let transforms = transform_map
-            .get(&mapping.field)
-            .cloned()
-            .unwrap_or_default();
 
         let join_type = if mapping.aggregate.is_some() {
             "aggregate".to_string()
@@ -390,17 +387,16 @@ fn collect_entries(
         };
 
         let mut field_tables: Vec<String> = Vec::new();
-        if let Some(source) = &mapping.source {
-            if let Some(table) = extract_table_identifier(source) {
-                if !field_tables.contains(&table) {
-                    field_tables.push(table);
-                }
-            }
+        if let Some(source) = &mapping.source
+            && let Some(table) = extract_table_identifier(source)
+            && !field_tables.contains(&table)
+        {
+            field_tables.push(table);
         }
-        if let Some(join) = &mapping.join {
-            if !field_tables.contains(&join.table) {
-                field_tables.push(join.table.clone());
-            }
+        if let Some(join) = &mapping.join
+            && !field_tables.contains(&join.table)
+        {
+            field_tables.push(join.table.clone());
         }
         if let Some(chain) = &mapping.join_chain {
             for entry in chain {
@@ -409,6 +405,11 @@ fn collect_entries(
                 }
             }
         }
+
+        let transforms = transform_map
+            .get(&mapping.field)
+            .cloned()
+            .unwrap_or_default();
 
         entries.push(FieldEntry {
             field: mapping.field.clone(),
@@ -421,20 +422,20 @@ fn collect_entries(
         });
 
         let mut tables_for_field = HashSet::new();
-        if let Some(source) = &mapping.source {
-            if let Some(table) = extract_table_identifier(source) {
-                tables_for_field.insert(table);
-            }
+        if let Some(source) = &mapping.source
+            && let Some(table) = extract_table_identifier(source)
+        {
+            tables_for_field.insert(table);
         }
-        if let Some(source_table) = &mapping.source_table {
-            if let Some(table) = extract_table_identifier(source_table) {
-                tables_for_field.insert(table);
-            }
+        if let Some(source_table) = &mapping.source_table
+            && let Some(table) = extract_table_identifier(source_table)
+        {
+            tables_for_field.insert(table);
         }
-        if let Some(join) = &mapping.join {
-            if let Some(table) = extract_table_identifier(&join.table) {
-                tables_for_field.insert(table);
-            }
+        if let Some(join) = &mapping.join
+            && let Some(table) = extract_table_identifier(&join.table)
+        {
+            tables_for_field.insert(table);
         }
         if let Some(chain) = &mapping.join_chain {
             for entry in chain {
