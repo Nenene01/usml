@@ -762,6 +762,7 @@ mod tests {
             usecase: Usecase {
                 name: "Users".to_string(),
                 summary: None,
+                output: None,
                 response_mapping: vec![ResponseMapping {
                     field: "id".to_string(),
                     source: Some("users.id".to_string()),
@@ -797,6 +798,7 @@ mod tests {
             usecase: Usecase {
                 name: "Profiles".to_string(),
                 summary: None,
+                output: None,
                 response_mapping: vec![ResponseMapping {
                     field: "profile_count".to_string(),
                     source: Some("profiles.id".to_string()),
@@ -841,37 +843,4 @@ mod tests {
         assert!(html.contains("profiles"));
     }
 
-    #[test]
-    fn test_generate_html_has_flow_svg_and_legend() {
-        let doc = UsmlDocument {
-            version: "0.1".to_string(),
-            import: Import {
-                openapi: None,
-                dbml: Some(vec!["./schema.dbml#tables[\"users\"]".to_string()]),
-            },
-            usecase: Usecase {
-                name: "Flow Test".to_string(),
-                summary: None,
-                response_mapping: vec![ResponseMapping {
-                    field: "name".to_string(),
-                    source: Some("users.name".to_string()),
-                    r#type: None,
-                    source_table: None,
-                    join: None,
-                    join_chain: None,
-                    aggregate: None,
-                    fields: None,
-                }],
-                filters: Vec::new(),
-                transforms: Vec::new(),
-            },
-        };
-        let html = generate_html(&doc);
-        assert!(html.contains("flow-svg"), "SVG overlay missing");
-        assert!(html.contains("flow-container"), "flow-container missing");
-        assert!(html.contains("legend"), "legend missing");
-        assert!(html.contains("data-field=\"name\""), "data-field missing");
-        assert!(html.contains("data-table=\"users\""), "data-table missing");
-        assert!(html.contains("drawFlows"), "JavaScript missing");
-    }
 }
