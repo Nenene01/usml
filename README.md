@@ -10,7 +10,10 @@ OpenAPI と DBML の間のデータフローを声明的に定義する言語で
 - **Aggregate** — COUNT/SUM/AVG/MIN/MAX と GROUP BY
 - **Transforms** — COALESCE/CONCAT/CASE/MASK/CONDITIONAL_SOURCE
 - **12規則バリデーション** — パス・メソッド・カラム・パラメータの存在確認まで
-- **インタラクティブ可視化** — SVGフロー線・ホバーハイライト付きデータフロー図
+- **インタラクティブ可視化** — タブ切り替え可能な2つのビュー
+  - **ビジュアルビュー**: ホバーハイライト付きデータフロー図（3カラムレイアウト）
+  - **テーブルビュー**: 階層構造を持つResponse Mappingテーブル
+  - **API情報表示**: OpenAPIから抽出したメソッド・パス・ステータスコードを自動表示
 - **VS Code拡張** — 自動バリデーション・データフロー図プレビュー
 
 ## Installation
@@ -46,12 +49,34 @@ usml parse examples/users-list.usml.yaml
 ### データフロー図生成
 
 ```sh
-# HTML を標準出力
+# デフォルト: ./output/<usecase-name>.html に出力
 usml visualize examples/users-list.usml.yaml
+# → 出力: output/ユーザー一覧取得.html
 
-# ファイルに出力
+# カスタムパスに出力 (-o または --output)
+usml visualize examples/users-list.usml.yaml -o custom.html
 usml visualize examples/users-list.usml.yaml --output flow.html
 ```
+
+**出力先の優先順位:**
+1. `-o/--output` オプション（最優先）
+2. USMLファイル内の `usecase.output` パラメータ
+3. デフォルト: `./output/<usecase.name>.html`
+
+**生成されるHTML の機能:**
+- **タブ切り替え**: テーブルビュー ⇄ ビジュアルビュー
+- **OpenAPI情報**: ヘッダーにHTTPメソッド・APIパス・ステータスコードを表示
+- **ビジュアルビュー**:
+  - 3カラムレイアウト（Response Fields / Joins & Transforms / Tables）
+  - Joins & Transformsカードに種類バッジ（Simple / JOIN / JOIN Chain / Aggregate）を表示
+  - ホバーで関連要素をハイライト（Response Fields → Joins & Transforms → Tables の対応関係）
+  - ネストされたフィールドは階層構造で色分け表示
+  - エイリアステーブルは「実テーブル名 (as エイリアス)」形式で表示
+- **テーブルビュー**:
+  - Response Mapping: フィールド・ソース・JOIN・変換を階層構造で表示
+  - Tables Summary: 使用されるテーブルとカラムの一覧（エイリアス表示対応）
+  - Filters: フィルタパラメータ・種類・詳細情報の一覧
+  - Transforms: 変換ロジックの詳細情報
 
 ## USML 構文
 
@@ -67,6 +92,7 @@ import:
 usecase:
   name: ユーザー一覧取得
   summary: ページネーション付きのユーザー一覧を返す
+  output: users-list.html  # オプション: 可視化HTMLのファイル名
 
   response_mapping:
     - field: id
@@ -113,12 +139,13 @@ usml/
 │   ├── ast.rs               # AST 型定義
 │   ├── parser.rs            # YAML → AST パーサー
 │   ├── validator.rs         # 12規則バリデーション + リゾルバー統合
-│   ├── visualizer.rs        # HTMLデータフロー図生成
+│   ├── visualizer.rs        # インタラクティブHTMLデータフロー図生成
 │   └── resolver/
 │       ├── dbml.rs          # DBML ファイル解析
 │       └── openapi.rs       # OpenAPI ファイル解析
 ├── extensions/vscode/       # VS Code 拡張
 ├── examples/                # サンプル USML ファイル
+├── output/                  # 生成されたHTMLファイル（デフォルト出力先）
 └── docs/spec/               # USML 仕様ドキュメント
 ```
 

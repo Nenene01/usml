@@ -2,9 +2,12 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
 use crate::ast::{ResponseMapping, Transform, UsmlDocument};
+use crate::resolver;
 
 struct FieldEntry {
     field: String,
+    field_path: String, // フルパス（例: "comments.id"）
+    source: Option<String>, // 元のsource（例: "posts.id"）
     badges: Vec<String>,
     join_lines: Vec<String>,
     transforms: Vec<String>,
@@ -17,39 +20,60 @@ pub fn generate_html(doc: &UsmlDocument) -> String {
     let transform_map = build_transform_map(&doc.usecase.transforms);
     let mut table_order = extract_import_tables(doc);
     let mut table_seen: HashSet<String> = table_order.iter().cloned().collect();
-    let mut table_counts: HashMap<String, usize> = table_order
+    let mut table_columns: HashMap<String, HashSet<String>> = table_order
         .iter()
         .cloned()
-        .map(|table| (table, 0))
+        .map(|table| (table, HashSet::new()))
         .collect();
     let mut entries = Vec::new();
+    let mut alias_map: HashMap<String, String> = HashMap::new(); // alias -> actual table name
 
     collect_entries(
         &doc.usecase.response_mapping,
         0,
+        "",
         &transform_map,
         &mut entries,
-        &mut table_counts,
+        &mut table_columns,
         &mut table_order,
         &mut table_seen,
+        &mut alias_map,
     );
 
     let mut html = String::new();
     html.push_str("<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n");
     html.push_str("<title>USML Data Flow Visualizer</title>\n");
+    html.push_str("<link rel=\"stylesheet\" href=\"https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css\">\n");
     html.push_str("<style>\n");
     html.push_str(
-        "body { font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif; background: #f5f7fa; color: #1f2a37; margin: 0; padding: 24px; }\n",
+        "body { font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif; background: #f5f7fa; color: #1f2a37; margin: 0; padding: 0; }\n",
     );
-    html.push_str(".container { max-width: 1200px; margin: 0 auto; }\n");
-    html.push_str("h1 { margin-bottom: 8px; font-size: 1.8rem; }\n");
-    html.push_str(".summary { margin-top: 0; color: #556070; }\n");
+    html.push_str(".header { background: #fff; border-bottom: 2px solid #e5e7eb; padding: 24px 32px 0 32px; }\n");
+    html.push_str(".header h1 { font-size: 1.8rem; margin: 0 0 8px 0; color: #1f2937; }\n");
+    html.push_str(".header .summary { font-size: 0.95rem; color: #6b7280; margin-bottom: 16px; line-height: 1.5; }\n");
+    html.push_str(".api-info { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; }\n");
+    html.push_str(".method-badge { display: inline-block; padding: 4px 10px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }\n");
+    html.push_str(".method-get { background: #dbeafe; color: #1e40af; }\n");
+    html.push_str(".method-post { background: #dcfce7; color: #15803d; }\n");
+    html.push_str(".method-put { background: #fef3c7; color: #92400e; }\n");
+    html.push_str(".method-delete { background: #fee2e2; color: #991b1b; }\n");
+    html.push_str(".method-patch { background: #f3e8ff; color: #6b21a8; }\n");
+    html.push_str(".api-path { font-family: 'Monaco', 'Menlo', monospace; font-size: 0.9rem; color: #374151; background: #f3f4f6; padding: 6px 12px; border-radius: 4px; }\n");
+    html.push_str(".status-badge { display: inline-block; padding: 4px 10px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; background: #d1fae5; color: #065f46; }\n");
+    html.push_str(".tabs { display: flex; gap: 4px; margin-top: 0; }\n");
+    html.push_str(".tab { display: flex; align-items: center; gap: 8px; padding: 12px 24px; background: transparent; color: #6b7280; border: none; border-bottom: 3px solid transparent; cursor: pointer; font-size: 0.95rem; font-weight: 500; transition: all 0.2s; }\n");
+    html.push_str(".tab:hover { color: #1f2937; background: #f9fafb; }\n");
+    html.push_str(".tab.active { color: #3b82f6; border-bottom-color: #3b82f6; }\n");
+    html.push_str(".tab i { font-size: 1.1rem; }\n");
+    html.push_str(".main-content { padding: 32px 32px 80px 32px; background: #fff; min-height: calc(100vh - 180px); }\n");
+    html.push_str(".view { display: none; }\n");
+    html.push_str(".view.active { display: block; }\n");
     html.push_str(
         ".grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; align-items: start; }\n",
     );
     html.push_str(".column h2 { font-size: 1.1rem; margin-bottom: 12px; }\n");
     html.push_str(
-        ".card { border-radius: 12px; padding: 12px 16px; margin-bottom: 12px; box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08); }\n",
+        ".card { border-radius: 12px; padding: 12px 16px; margin-bottom: 12px; box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08); transition: all 0.2s ease; }\n",
     );
     html.push_str(".response-card { background: #e8f4fd; }\n");
     html.push_str(".join-card { background: #fff8e1; }\n");
@@ -61,41 +85,83 @@ pub fn generate_html(doc: &UsmlDocument) -> String {
     html.push_str(".field-name.small { font-weight: 500; font-size: 0.9rem; color: #394150; }\n");
     html.push_str(".join-line, .transform-line { font-size: 0.9rem; margin-top: 4px; }\n");
     html.push_str(".empty { color: #6b7280; font-size: 0.9rem; }\n");
-    html.push_str(".depth-1 { margin-left: 12px; }\n");
-    html.push_str(".depth-2 { margin-left: 24px; }\n");
-    html.push_str(".depth-3 { margin-left: 36px; }\n");
-    html.push_str(".depth-4 { margin-left: 48px; }\n");
+    html.push_str(".depth-1 { margin-left: 24px; padding-left: 12px; border-left: 3px solid #3b82f6; background: #dbeafe !important; }\n");
+    html.push_str(".depth-2 { margin-left: 48px; padding-left: 12px; border-left: 3px solid #8b5cf6; background: #e9d5ff !important; }\n");
+    html.push_str(".depth-3 { margin-left: 72px; padding-left: 12px; border-left: 3px solid #ec4899; background: #fce7f3 !important; }\n");
+    html.push_str(".depth-4 { margin-left: 96px; padding-left: 12px; border-left: 3px solid #f59e0b; background: #fef3c7 !important; }\n");
     html.push_str("#flow-container { position: relative; }\n");
     html.push_str("#flow-svg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }\n");
     html.push_str(".arrow-simple { stroke: #9ca3af; }\n");
     html.push_str(".arrow-join { stroke: #d4a017; }\n");
     html.push_str(".arrow-join-chain { stroke: #3b82f6; }\n");
     html.push_str(".arrow-aggregate { stroke: #8b5cf6; }\n");
-    html.push_str(".card { transition: box-shadow 0.2s ease, transform 0.15s ease; }\n");
-    html.push_str(".card.highlighted { box-shadow: 0 0 16px rgba(59,130,246,0.4); transform: scale(1.02); }\n");
-    html.push_str(".legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 20px; padding: 12px 16px; background: #fff; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); }\n");
+    html.push_str(".card.highlighted { box-shadow: 0 0 24px rgba(251,191,36,0.9), 0 0 12px rgba(251,191,36,0.6); transform: scale(1.05); border: 3px solid #fbbf24; }\n");
+    html.push_str(".legend { position: fixed; bottom: 0; left: 0; right: 0; z-index: 100; display: none; gap: 16px; flex-wrap: wrap; justify-content: center; padding: 12px 16px; background: #fff; border-top: 2px solid #e5e7eb; box-shadow: 0 -4px 12px rgba(0,0,0,0.1); }\n");
+    html.push_str(".legend.active { display: flex; }\n");
     html.push_str(
         ".legend-item { display: flex; align-items: center; gap: 6px; font-size: 0.85rem; }\n",
     );
     html.push_str(".legend-line { width: 28px; height: 3px; border-radius: 2px; }\n");
+    html.push_str("table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }\n");
+    html.push_str("thead { background: #374151; color: #fff; }\n");
+    html.push_str("th { padding: 12px 16px; text-align: left; font-weight: 600; font-size: 0.9rem; }\n");
+    html.push_str("td { padding: 12px 16px; border-bottom: 1px solid #e5e7eb; }\n");
+    html.push_str("tbody tr:last-child td { border-bottom: none; }\n");
+    html.push_str("tbody tr:hover { background: #f9fafb; }\n");
+    html.push_str(".table-section { margin-bottom: 32px; }\n");
+    html.push_str(".table-section h2 { font-size: 1.3rem; margin-bottom: 16px; }\n");
+    html.push_str(".indent-1 { padding-left: 32px; background: #eff6ff; }\n");
+    html.push_str(".indent-2 { padding-left: 48px; background: #f3e8ff; }\n");
+    html.push_str(".indent-3 { padding-left: 64px; background: #fce7f3; }\n");
+    html.push_str(".indent-4 { padding-left: 80px; background: #fef3c7; }\n");
+    html.push_str("code.inline { background: #e5e7eb; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }\n");
     html.push_str("</style>\n</head>\n<body>\n");
 
-    write!(
-        &mut html,
-        "<div class=\"container\"><h1>{}</h1>",
-        escape_html(&doc.usecase.name)
-    )
-    .unwrap();
+    // ヘッダー
+    html.push_str("<div class=\"header\">\n");
+    write!(&mut html, "<h1>{}</h1>", escape_html(&doc.usecase.name)).unwrap();
     if let Some(summary) = &doc.usecase.summary {
-        write!(
-            &mut html,
-            "<p class=\"summary\">{}</p>",
-            escape_html(summary)
-        )
-        .unwrap();
+        write!(&mut html, "<p class=\"summary\">{}</p>", escape_html(summary)).unwrap();
     }
-    html.push_str("<div class=\"grid\" id=\"flow-container\">\n");
-    html.push_str("<svg id=\"flow-svg\" xmlns=\"http://www.w3.org/2000/svg\"></svg>\n");
+
+    // OpenAPI情報を表示
+    if let Some(openapi_ref) = &doc.import.openapi {
+        if let Some((_file, path, method, status)) = resolver::openapi::parse_openapi_ref(openapi_ref) {
+            html.push_str("<div class=\"api-info\">\n");
+
+            // HTTPメソッドバッジ
+            let method_upper = method.to_uppercase();
+            let method_class = match method_upper.as_str() {
+                "GET" => "method-get",
+                "POST" => "method-post",
+                "PUT" => "method-put",
+                "DELETE" => "method-delete",
+                "PATCH" => "method-patch",
+                _ => "method-get",
+            };
+            write!(&mut html, "<span class=\"method-badge {}\">{}</span>", method_class, escape_html(&method_upper)).unwrap();
+
+            // APIパス
+            write!(&mut html, "<span class=\"api-path\">{}</span>", escape_html(&path)).unwrap();
+
+            // ステータスコード
+            write!(&mut html, "<span class=\"status-badge\">Status: {}</span>", escape_html(&status)).unwrap();
+
+            html.push_str("</div>\n");
+        }
+    }
+
+    html.push_str("<div class=\"tabs\">\n");
+    html.push_str("<button class=\"tab active\" onclick=\"switchView('table', event)\"><i class=\"fas fa-table\"></i> テーブル</button>\n");
+    html.push_str("<button class=\"tab\" onclick=\"switchView('visual', event)\"><i class=\"fas fa-project-diagram\"></i> ビジュアル</button>\n");
+    html.push_str("</div></div>\n");
+
+    // メインコンテンツ
+    html.push_str("<div class=\"main-content\">\n");
+
+    // ビジュアルビュー
+    html.push_str("<div id=\"visual-view\" class=\"view\">\n");
+    html.push_str("<div class=\"grid\">\n");
 
     html.push_str("<div class=\"column\">\n<h2>Response Fields</h2>\n");
     if entries.is_empty() {
@@ -107,7 +173,7 @@ pub fn generate_html(doc: &UsmlDocument) -> String {
                 &mut html,
                 "<div class=\"card response-card{}\" data-field=\"{}\" data-tables=\"{}\" data-join-type=\"{}\">",
                 depth_class,
-                escape_html(&entry.field),
+                escape_html(&entry.field_path),
                 escape_html(&entry.tables.join(",")),
                 escape_html(&entry.join_type)
             )
@@ -136,16 +202,22 @@ pub fn generate_html(doc: &UsmlDocument) -> String {
     html.push_str("</div>\n");
 
     html.push_str("<div class=\"column\">\n<h2>Joins &amp; Transforms</h2>\n");
-    if entries.is_empty() {
+    let has_joins_or_transforms = entries.iter().any(|e| !e.join_lines.is_empty() || !e.transforms.is_empty());
+    if !has_joins_or_transforms {
         html.push_str("<div class=\"empty\">No joins or transforms.</div>");
     } else {
         for entry in &entries {
+            // JOINやtransformがない場合はスキップ
+            if entry.join_lines.is_empty() && entry.transforms.is_empty() {
+                continue;
+            }
+
             let depth_class = depth_class(entry.depth);
             write!(
                 &mut html,
                 "<div class=\"card join-card{}\" data-field=\"{}\">",
                 depth_class,
-                escape_html(&entry.field)
+                escape_html(&entry.field_path)
             )
             .unwrap();
             write!(
@@ -154,30 +226,42 @@ pub fn generate_html(doc: &UsmlDocument) -> String {
                 escape_html(&entry.field)
             )
             .unwrap();
-            if entry.join_lines.is_empty() && entry.transforms.is_empty() {
-                html.push_str("<div class=\"empty\">No join/transform.</div>");
-            } else {
-                for join_line in &entry.join_lines {
+
+            // 種類バッジを追加
+            let join_type_label = match entry.join_type.as_str() {
+                "simple" => "Simple",
+                "join" => "JOIN",
+                "join-chain" => "JOIN Chain",
+                "aggregate" => "Aggregate",
+                _ => "Simple",
+            };
+            write!(
+                &mut html,
+                "<div style=\"margin-bottom: 6px;\"><span class=\"badge\">{}</span></div>",
+                join_type_label
+            )
+            .unwrap();
+
+            for join_line in &entry.join_lines {
+                write!(
+                    &mut html,
+                    "<div class=\"join-line\">{}</div>",
+                    escape_html(join_line)
+                )
+                .unwrap();
+            }
+            if !entry.transforms.is_empty() {
+                html.push_str("<div class=\"transform-line\">Transforms:</div>");
+                html.push_str("<div>");
+                for transform in &entry.transforms {
                     write!(
                         &mut html,
-                        "<div class=\"join-line\">{}</div>",
-                        escape_html(join_line)
+                        "<span class=\"badge\">{}</span>",
+                        escape_html(transform)
                     )
                     .unwrap();
                 }
-                if !entry.transforms.is_empty() {
-                    html.push_str("<div class=\"transform-line\">Transforms:</div>");
-                    html.push_str("<div>");
-                    for transform in &entry.transforms {
-                        write!(
-                            &mut html,
-                            "<span class=\"badge\">{}</span>",
-                            escape_html(transform)
-                        )
-                        .unwrap();
-                    }
-                    html.push_str("</div>");
-                }
+                html.push_str("</div>");
             }
             html.push_str("</div>\n");
         }
@@ -189,81 +273,59 @@ pub fn generate_html(doc: &UsmlDocument) -> String {
         html.push_str("<div class=\"empty\">No tables imported.</div>");
     } else {
         for table in &table_order {
-            let count = table_counts.get(table).copied().unwrap_or(0);
-            writeln!(
+            let columns = table_columns.get(table);
+            // エイリアスかどうかを判定
+            let display_name = if let Some(actual_table) = alias_map.get(table) {
+                format!("{} <span style=\"color: #6b7280; font-weight: 400;\">(as {})</span>", actual_table, table)
+            } else {
+                table.clone()
+            };
+            write!(
                 &mut html,
-                "<div class=\"card table-card\" data-table=\"{}\"><div class=\"field-name\">{}</div><div class=\"join-line\">Referenced by {} field{}</div></div>",
+                "<div class=\"card table-card\" data-table=\"{}\"><div class=\"field-name\">{}</div>",
                 escape_html(table),
-                escape_html(table),
-                count,
-                if count == 1 { "" } else { "s" }
+                display_name
             )
             .unwrap();
+
+            if let Some(cols) = columns && !cols.is_empty() {
+                let mut sorted_cols: Vec<_> = cols.iter().collect();
+                sorted_cols.sort();
+                html.push_str("<div class=\"join-line\">Columns:</div><div style=\"margin-top: 4px;\">");
+                for (i, col) in sorted_cols.iter().enumerate() {
+                    if i > 0 {
+                        html.push_str(", ");
+                    }
+                    write!(&mut html, "<code style=\"background: #e5e7eb; padding: 2px 6px; border-radius: 4px; font-size: 0.85rem;\">{}</code>", escape_html(col)).unwrap();
+                }
+                html.push_str("</div>");
+            } else {
+                html.push_str("<div class=\"join-line\" style=\"color: #9ca3af;\">No columns referenced</div>");
+            }
+            html.push_str("</div>\n");
         }
     }
-    html.push_str("</div>\n</div>\n");
-    // Legend
-    html.push_str("<div class=\"legend\">\n");
-    html.push_str("<div class=\"legend-item\"><div class=\"legend-line\" style=\"background:#9ca3af\"></div>Simple</div>\n");
-    html.push_str("<div class=\"legend-item\"><div class=\"legend-line\" style=\"background:#d4a017\"></div>JOIN</div>\n");
-    html.push_str("<div class=\"legend-item\"><div class=\"legend-line\" style=\"background:#3b82f6\"></div>JOIN Chain</div>\n");
-    html.push_str("<div class=\"legend-item\"><div class=\"legend-line\" style=\"background:#8b5cf6\"></div>Aggregate</div>\n");
+    html.push_str("</div>\n</div>\n</div>\n"); // column (Tables), grid, visual-view の終了
+
+    // テーブルビュー
+    html.push_str("<div id=\"table-view\" class=\"view active\">\n");
+    generate_table_view(&mut html, &entries, &table_order, &table_columns, doc, &alias_map);
     html.push_str("</div>\n");
-    html.push_str("</div>\n");
-    // JavaScript for SVG flow lines and hover highlighting
+
+    html.push_str("</div>\n"); // main-content の終了
+
+    // JavaScript for view switching
     html.push_str(r#"<script>
-(function() {
-  function drawFlows() {
-    var container = document.getElementById('flow-container');
-    var svg = document.getElementById('flow-svg');
-    if (!container || !svg) return;
-    svg.innerHTML = '';
-    var containerRect = container.getBoundingClientRect();
-    document.querySelectorAll('.response-card[data-tables]').forEach(function(card) {
-      var tables = card.dataset.tables.split(',').filter(function(t) { return t.length > 0; });
-      var joinType = card.dataset.joinType || 'simple';
-      var cardRect = card.getBoundingClientRect();
-      tables.forEach(function(tableName) {
-        var tableCard = document.querySelector('.table-card[data-table="' + tableName + '"]');
-        if (!tableCard) return;
-        var tableRect = tableCard.getBoundingClientRect();
-        var x1 = cardRect.right - containerRect.left;
-        var y1 = cardRect.top + cardRect.height / 2 - containerRect.top;
-        var x2 = tableRect.left - containerRect.left;
-        var y2 = tableRect.top + tableRect.height / 2 - containerRect.top;
-        var midX = (x1 + x2) / 2;
-        var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        path.setAttribute('d', 'M ' + x1 + ' ' + y1 + ' C ' + midX + ' ' + y1 + ', ' + midX + ' ' + y2 + ', ' + x2 + ' ' + y2);
-        path.setAttribute('fill', 'none');
-        path.setAttribute('stroke-width', '2');
-        path.setAttribute('class', 'arrow-' + joinType);
-        path.setAttribute('data-field', card.dataset.field);
-        path.setAttribute('data-table', tableName);
-        var colors = { 'simple': '#9ca3af', 'join': '#d4a017', 'join-chain': '#3b82f6', 'aggregate': '#8b5cf6' };
-        var color = colors[joinType] || '#9ca3af';
-        var markerId = 'arrow-' + joinType;
-        var defs = svg.querySelector('defs');
-        if (!defs) { defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs'); svg.insertBefore(defs, svg.firstChild); }
-        if (!defs.querySelector('#' + markerId)) {
-          var marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
-          marker.setAttribute('id', markerId);
-          marker.setAttribute('viewBox', '0 0 10 10');
-          marker.setAttribute('refX', '9');
-          marker.setAttribute('refY', '5');
-          marker.setAttribute('markerWidth', '6');
-          marker.setAttribute('markerHeight', '6');
-          marker.setAttribute('orient', 'auto-start-reverse');
-          var markerPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-          markerPath.setAttribute('d', 'M 0 0 L 10 5 L 0 10 z');
-          markerPath.setAttribute('fill', color);
-          marker.appendChild(markerPath);
-          defs.appendChild(marker);
-        }
-        path.setAttribute('marker-end', 'url(#' + markerId + ')');
-        svg.appendChild(path);
-      });
-    });
+function switchView(viewName, event) {
+  document.querySelectorAll('.view').forEach(function(v) { v.classList.remove('active'); });
+  document.querySelectorAll('.tab').forEach(function(b) { b.classList.remove('active'); });
+  document.getElementById(viewName + '-view').classList.add('active');
+  if (event && event.target) {
+    event.target.classList.add('active');
   }
+}
+
+(function() {
   function setupHover() {
     document.querySelectorAll('.response-card[data-field]').forEach(function(card) {
       card.addEventListener('mouseenter', function() {
@@ -275,19 +337,15 @@ pub fn generate_html(doc: &UsmlDocument) -> String {
           var tc = document.querySelector('.table-card[data-table="' + t + '"]');
           if (tc) tc.classList.add('highlighted');
         });
-        document.querySelectorAll('#flow-svg path[data-field="' + field + '"]').forEach(function(p) {
-          p.setAttribute('stroke-width', '4');
-          p.style.filter = 'drop-shadow(0 0 4px currentColor)';
-        });
       });
       card.addEventListener('mouseleave', function() {
         document.querySelectorAll('.card').forEach(function(c) { c.classList.remove('highlighted'); });
-        document.querySelectorAll('#flow-svg path').forEach(function(p) { p.setAttribute('stroke-width', '2'); p.style.filter = ''; });
       });
     });
   }
-  window.addEventListener('load', function() { drawFlows(); setupHover(); });
-  window.addEventListener('resize', drawFlows);
+  window.addEventListener('load', function() {
+    setupHover();
+  });
 })();
 </script>
 "#);
@@ -341,11 +399,13 @@ fn extract_table_identifier(value: &str) -> Option<String> {
 fn collect_entries(
     mappings: &[ResponseMapping],
     depth: usize,
+    parent_path: &str,
     transform_map: &HashMap<String, Vec<String>>,
     entries: &mut Vec<FieldEntry>,
-    table_counts: &mut HashMap<String, usize>,
+    table_columns: &mut HashMap<String, HashSet<String>>,
     table_order: &mut Vec<String>,
     table_seen: &mut HashSet<String>,
+    alias_map: &mut HashMap<String, String>,
 ) {
     for mapping in mappings {
         let mut badges = Vec::new();
@@ -359,10 +419,14 @@ fn collect_entries(
         let mut join_lines = Vec::new();
         if let Some(join) = &mapping.join {
             let join_type = join.r#type.as_deref().unwrap_or("JOIN");
-            let mut line = format!("{} {} ON {}", join_type, join.table, join.on);
-            if let Some(alias) = &join.alias {
-                line = format!("{} AS {}", line, alias);
-            }
+            let table_part = if let Some(alias) = &join.alias {
+                // エイリアスマッピングを記録
+                alias_map.insert(alias.clone(), join.table.clone());
+                format!("{} AS {}", join.table, alias)
+            } else {
+                join.table.clone()
+            };
+            let line = format!("{} {} ON {}", join_type, table_part, join.on);
             join_lines.push(line);
         }
         if let Some(chain) = &mapping.join_chain
@@ -411,8 +475,17 @@ fn collect_entries(
             .cloned()
             .unwrap_or_default();
 
+        // フルパスを構築（親がいる場合は "親.子" の形式）
+        let field_path = if parent_path.is_empty() {
+            mapping.field.clone()
+        } else {
+            format!("{}.{}", parent_path, mapping.field)
+        };
+
         entries.push(FieldEntry {
             field: mapping.field.clone(),
+            field_path,
+            source: mapping.source.clone(),
             badges,
             join_lines,
             transforms,
@@ -421,47 +494,59 @@ fn collect_entries(
             join_type,
         });
 
-        let mut tables_for_field = HashSet::new();
-        if let Some(source) = &mapping.source
-            && let Some(table) = extract_table_identifier(source)
-        {
-            tables_for_field.insert(table);
-        }
-        if let Some(source_table) = &mapping.source_table
-            && let Some(table) = extract_table_identifier(source_table)
-        {
-            tables_for_field.insert(table);
-        }
-        if let Some(join) = &mapping.join
-            && let Some(table) = extract_table_identifier(&join.table)
-        {
-            tables_for_field.insert(table);
-        }
-        if let Some(chain) = &mapping.join_chain {
-            for entry in chain {
-                if let Some(table) = extract_table_identifier(&entry.table) {
-                    tables_for_field.insert(table);
+        // テーブルとカラムの情報を記録
+        if let Some(source) = &mapping.source {
+            if let Some((table, column)) = source.split_once('.') {
+                let table = table.to_string();
+                let column = column.to_string();
+
+                table_columns
+                    .entry(table.clone())
+                    .or_insert_with(HashSet::new)
+                    .insert(column);
+
+                if table_seen.insert(table.clone()) {
+                    table_order.push(table);
                 }
             }
         }
 
-        for table in tables_for_field {
-            let count = table_counts.entry(table.clone()).or_insert(0);
-            *count += 1;
+        // JOIN、JOIN chainのテーブルも記録（カラムなし）
+        if let Some(join) = &mapping.join {
+            let table = join.table.clone();
+            table_columns.entry(table.clone()).or_insert_with(HashSet::new);
             if table_seen.insert(table.clone()) {
                 table_order.push(table);
             }
         }
 
+        if let Some(chain) = &mapping.join_chain {
+            for entry in chain {
+                let table = entry.table.clone();
+                table_columns.entry(table.clone()).or_insert_with(HashSet::new);
+                if table_seen.insert(table.clone()) {
+                    table_order.push(table);
+                }
+            }
+        }
+
         if let Some(fields) = &mapping.fields {
+            // 親パスを現在のフィールドパスに更新して再帰
+            let current_field_path = if parent_path.is_empty() {
+                mapping.field.clone()
+            } else {
+                format!("{}.{}", parent_path, mapping.field)
+            };
             collect_entries(
                 fields,
                 depth + 1,
+                &current_field_path,
                 transform_map,
                 entries,
-                table_counts,
+                table_columns,
                 table_order,
                 table_seen,
+                alias_map,
             );
         }
     }
@@ -472,6 +557,183 @@ fn depth_class(depth: usize) -> String {
         String::new()
     } else {
         format!(" depth-{}", depth.min(4))
+    }
+}
+
+fn generate_table_view(
+    html: &mut String,
+    entries: &[FieldEntry],
+    table_order: &[String],
+    table_columns: &HashMap<String, HashSet<String>>,
+    doc: &UsmlDocument,
+    alias_map: &HashMap<String, String>,
+) {
+    // Response Mapping Table
+    html.push_str("<div class=\"table-section\"><h2>Response Mapping</h2>\n");
+    html.push_str("<table><thead><tr><th>Field</th><th>Source</th><th>Type</th><th>JOIN</th><th>Transforms</th></tr></thead><tbody>\n");
+
+    for entry in entries {
+        let indent_class = match entry.depth {
+            1 => " class=\"indent-1\"",
+            2 => " class=\"indent-2\"",
+            3 => " class=\"indent-3\"",
+            4 => " class=\"indent-4\"",
+            _ => "",
+        };
+        write!(html, "<tr{}>", indent_class).unwrap();
+
+        // フィールド名にインデント表現を追加
+        let field_display = if entry.depth > 0 {
+            let indent = "  ".repeat(entry.depth);
+            format!("{}\u{2514}\u{2500} {}", indent, entry.field)
+        } else {
+            entry.field.clone()
+        };
+        write!(html, "<td><code class=\"inline\">{}</code></td>", escape_html(&field_display)).unwrap();
+
+        // Source - mapping.sourceまたはtables列から推定
+        let source = if let Some(src) = &entry.source {
+            src.clone()
+        } else if !entry.tables.is_empty() {
+            entry.tables.join(", ")
+        } else {
+            "-".to_string()
+        };
+        write!(html, "<td>{}</td>", escape_html(&source)).unwrap();
+
+        // Type - badges
+        let type_str = if !entry.badges.is_empty() {
+            entry.badges.join(", ")
+        } else {
+            "-".to_string()
+        };
+        write!(html, "<td>{}</td>", escape_html(&type_str)).unwrap();
+
+        // JOIN
+        let join_str = if !entry.join_lines.is_empty() {
+            entry.join_lines.join("<br>")
+        } else {
+            "-".to_string()
+        };
+        write!(html, "<td>{}</td>", join_str).unwrap();
+
+        // Transforms
+        let transform_str = if !entry.transforms.is_empty() {
+            entry.transforms.iter().map(|t| format!("<code class=\"inline\">{}</code>", escape_html(t))).collect::<Vec<_>>().join(", ")
+        } else {
+            "-".to_string()
+        };
+        write!(html, "<td>{}</td>", transform_str).unwrap();
+
+        html.push_str("</tr>\n");
+    }
+
+    html.push_str("</tbody></table></div>\n");
+
+    // Tables Summary
+    html.push_str("<div class=\"table-section\"><h2>Tables Summary</h2>\n");
+    html.push_str("<table><thead><tr><th>Table</th><th>Columns</th></tr></thead><tbody>\n");
+
+    for table in table_order {
+        // エイリアスかどうかを判定
+        let display_name = if let Some(actual_table) = alias_map.get(table) {
+            format!("<strong>{}</strong> <span style=\"color: #6b7280; font-weight: 400;\">(as {})</span>", escape_html(actual_table), escape_html(table))
+        } else {
+            format!("<strong>{}</strong>", escape_html(table))
+        };
+        write!(html, "<tr><td>{}</td>", display_name).unwrap();
+
+        if let Some(cols) = table_columns.get(table) && !cols.is_empty() {
+            let mut sorted_cols: Vec<_> = cols.iter().collect();
+            sorted_cols.sort();
+            let cols_html = sorted_cols.iter().map(|c| format!("<code class=\"inline\">{}</code>", escape_html(c))).collect::<Vec<_>>().join(", ");
+            write!(html, "<td>{}</td>", cols_html).unwrap();
+        } else {
+            html.push_str("<td style=\"color: #9ca3af;\">No columns referenced</td>");
+        }
+
+        html.push_str("</tr>\n");
+    }
+
+    html.push_str("</tbody></table></div>\n");
+
+    // Filters Summary
+    if !doc.usecase.filters.is_empty() {
+        html.push_str("<div class=\"table-section\"><h2>Filters</h2>\n");
+        html.push_str("<table><thead><tr><th>Parameter</th><th>Maps To</th><th>Details</th></tr></thead><tbody>\n");
+
+        for filter in &doc.usecase.filters {
+            write!(html, "<tr><td><code class=\"inline\">{}</code></td>", escape_html(&filter.param)).unwrap();
+            write!(html, "<td><strong>{}</strong></td>", escape_html(&filter.maps_to)).unwrap();
+
+            let mut details = Vec::new();
+            if let Some(condition) = &filter.condition {
+                details.push(format!("<code class=\"inline\">{}</code>", escape_html(condition)));
+            }
+            if let Some(strategy) = &filter.strategy {
+                details.push(format!("strategy: <code class=\"inline\">{}</code>", escape_html(strategy)));
+            }
+            if let Some(page_size) = filter.page_size {
+                details.push(format!("page_size: <code class=\"inline\">{}</code>", page_size));
+            }
+
+            let details_html = if details.is_empty() {
+                "-".to_string()
+            } else {
+                details.join(", ")
+            };
+            write!(html, "<td>{}</td>", details_html).unwrap();
+
+            html.push_str("</tr>\n");
+        }
+
+        html.push_str("</tbody></table></div>\n");
+    }
+
+    // Transforms Summary
+    if !doc.usecase.transforms.is_empty() {
+        html.push_str("<div class=\"table-section\"><h2>Transforms</h2>\n");
+        html.push_str("<table><thead><tr><th>Target</th><th>Type</th><th>Sources</th><th>Details</th></tr></thead><tbody>\n");
+
+        for transform in &doc.usecase.transforms {
+            write!(html, "<tr><td><code class=\"inline\">{}</code></td>", escape_html(&transform.target)).unwrap();
+            write!(html, "<td><strong>{}</strong></td>", escape_html(&transform.r#type)).unwrap();
+
+            // Sources
+            let sources_html = if let Some(sources) = &transform.sources {
+                sources.iter().map(|s| format!("<code class=\"inline\">{}</code>", escape_html(s))).collect::<Vec<_>>().join(", ")
+            } else if let Some(source) = &transform.source {
+                format!("<code class=\"inline\">{}</code>", escape_html(source))
+            } else {
+                "-".to_string()
+            };
+            write!(html, "<td>{}</td>", sources_html).unwrap();
+
+            // Details
+            let mut details = Vec::new();
+            if let Some(separator) = &transform.separator {
+                details.push(format!("separator: <code class=\"inline\">{}</code>", escape_html(separator)));
+            }
+            if let Some(fallback) = &transform.fallback {
+                details.push(format!("fallback: <code class=\"inline\">{}</code>", escape_html(fallback)));
+            }
+            if let Some(when) = &transform.when {
+                if !when.is_empty() {
+                    details.push(format!("when: {} conditions", when.len()));
+                }
+            }
+
+            let details_html = if details.is_empty() {
+                "-".to_string()
+            } else {
+                details.join(", ")
+            };
+            write!(html, "<td>{}</td>", details_html).unwrap();
+
+            html.push_str("</tr>\n");
+        }
+
+        html.push_str("</tbody></table></div>\n");
     }
 }
 

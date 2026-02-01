@@ -20,6 +20,8 @@ pub struct Import {
 pub struct Usecase {
     pub name: String,
     pub summary: Option<String>,
+    #[serde(default)]
+    pub output: Option<String>,
     pub response_mapping: Vec<ResponseMapping>,
     #[serde(default)]
     pub filters: Vec<Filter>,

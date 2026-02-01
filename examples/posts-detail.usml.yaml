@@ -64,7 +64,7 @@ usecase:
           join:
             table: users
             alias: comment_author
-            on: comments.user_id = comment_author.id
+            on: comments.user_id = users.id
         - field: created_at
           source: comments.created_at
 
@@ -73,12 +73,12 @@ usecase:
       maps_to: WHERE
       condition: posts.id = :post_id
 
-  transforms:
-    - target: comments.body
-      type: MASK
-      source: comments.body
-      mask_pattern: ""
-      when:
-        - source: posts.status
-          operator: "=="
-          value: "draft"
+  # transforms:
+  #   - target: comments.body
+  #     type: MASK
+  #     source: comments.body
+  #     mask_pattern: ""
+  #     condition:
+  #       - source: posts.status
+  #         operator: "=="
+  #         value: "draft"

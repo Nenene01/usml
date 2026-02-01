@@ -43,6 +43,7 @@ import:
 usecase:
   name: <ユースケース名>
   summary: <説明>
+  output: <出力ファイル名>  # オプション: 可視化HTMLのファイル名
 
   response_mapping:
     - <マッピング定義>
@@ -53,6 +54,21 @@ usecase:
   transforms:
     - <変換定義>
 ```
+
+### 2.1 usecase.output パラメータ
+
+可視化HTMLの出力ファイル名を指定する。
+
+```yaml
+usecase:
+  name: ユーザー一覧取得
+  output: user-list-report.html
+```
+
+- `output`: 出力HTMLファイル名（オプション）
+- 未指定の場合は `<usecase.name>.html` が使用される
+- CLI の `-o/--output` オプションが指定された場合はそちらが優先される
+- 出力ディレクトリは `./output/` 配下となる（詳細は「11. CLI コマンド」を参照）
 
 ---
 
@@ -147,7 +163,7 @@ response_mapping:
     join:
       table: users
       alias: comment_author
-      on: posts.last_comment_user_id = comment_author.id
+      on: posts.last_comment_user_id = users.id
 ```
 
 ### 4.3 集約参照
@@ -392,6 +408,7 @@ import:
 usecase:
   name: ユーザー一覧取得
   summary: ページネーション付きのユーザー一覧を返す
+  output: users-list.html  # オプション: 可視化HTMLのファイル名
 
   response_mapping:
     - field: id
@@ -494,7 +511,7 @@ usecase:
           join:
             table: users
             alias: comment_author
-            on: comments.user_id = comment_author.id
+            on: comments.user_id = users.id
         - field: created_at
           source: comments.created_at
 
@@ -527,15 +544,125 @@ usecase:
 
 ## 9. 視覚化
 
-パーサーが生成するビジュアル出力のスコープ：
+`usml visualize` コマンドで生成されるHTMLの機能：
 
-- **データフロー図**: レスポンスフィールド → 結合 → テーブルのグラフ
-- **クエリ概要**: 生成されるSQL的なアウトラインの表示
-- **バリデーション結果**: エラー・警告の一覧と該当行のハイライト
+### 9.1 UI構成
+
+- **タブUI**: テーブルビューとビジュアルビューを切り替え可能
+- **OpenAPI情報の自動表示**: ヘッダーにHTTPメソッド・APIパス・ステータスコードを表示
+
+### 9.2 ビジュアルビュー
+
+3カラムレイアウトでデータフローを可視化：
+
+- **Response Fields カラム**: APIレスポンスのフィールド一覧
+  - ネストされたフィールドは階層構造で色分け表示（depth-1: 青、depth-2: 紫、depth-3: ピンク、depth-4: イエロー）
+- **Joins & Transforms カラム**: 結合・変換ロジックの詳細
+  - 各カードに種類バッジを表示（Simple / JOIN / JOIN Chain / Aggregate）
+  - JOIN条件や変換ルールを表示
+- **Tables カラム**: 使用されるテーブルとカラムの一覧
+  - エイリアスが設定されている場合は「実テーブル名 (as エイリアス)」の形式で表示
+
+**ホバーハイライト機能**:
+- Response Fieldsのカードにマウスを乗せると、関連する Joins & Transforms および Tables のカードが黄色くハイライトされる
+
+### 9.3 テーブルビュー
+
+構造化された表形式でデータを表示：
+
+- **Response Mapping テーブル**: フィールド・ソース・型・JOIN・変換を階層構造で一覧表示
+  - ネストされたフィールドは視覚的なインデント（`└─`）で表現
+- **Tables Summary テーブル**: 使用されるテーブルと参照されるカラムの一覧
+  - エイリアスが設定されている場合は「実テーブル名 (as エイリアス)」の形式で表示
+  - 例: `users (as comment_author)`
+- **Filters テーブル**: フィルタパラメータ・種類・詳細情報を一覧表示
+  - Parameter: パラメータ名
+  - Maps To: WHERE / PAGINATION / ORDER_BY 等
+  - Details: 条件式、ストラテジー、ページサイズ等
+- **Transforms テーブル**: 変換ロジックの詳細を一覧表示
+  - Target: 変換対象フィールド
+  - Type: COALESCE / CONCAT / CASE 等
+  - Sources: 変換元ソース
+  - Details: セパレータ、フォールバック値、条件数等
 
 ---
 
-## 10. 今後の拡張候補（v0.2以降）
+## 10. CLI コマンド
+
+USML CLI は以下のサブコマンドを提供する。
+
+### 10.1 validate - バリデーション実行
+
+```bash
+usml validate <ファイルパス> [--json]
+```
+
+**オプション:**
+- `--json`: JSON形式で結果を出力（CI/CD連携用）
+
+**JSON出力形式:**
+```json
+{
+  "file": "examples/users-list.usml.yaml",
+  "status": "ok"|"error",
+  "diagnostics": [
+    {
+      "severity": "error"|"warning",
+      "rule": "規則名",
+      "message": "エラーメッセージ"
+    }
+  ]
+}
+```
+
+**使用例:**
+```bash
+# 通常のバリデーション
+usml validate examples/users-list.usml.yaml
+
+# JSON形式で出力
+usml validate --json examples/users-list.usml.yaml
+```
+
+### 10.2 visualize - データフロー図生成
+
+```bash
+usml visualize <ファイルパス> [-o|--output <出力先>]
+```
+
+**出力先の優先順位:**
+1. `-o/--output` オプション（最優先）
+2. USMLファイル内の `usecase.output` パラメータ
+3. デフォルト: `./output/<usecase.name>.html`
+
+**出力ディレクトリ:**
+- デフォルトで `./output/` ディレクトリに出力される
+- ディレクトリが存在しない場合は自動的に作成される
+
+**使用例:**
+```bash
+# デフォルト出力（./output/ユーザー一覧取得.html）
+usml visualize examples/users-list.usml.yaml
+
+# カスタムパスに出力
+usml visualize examples/users-list.usml.yaml -o custom.html
+
+# usecase.output パラメータで指定（./output/user-report.html）
+# USMLファイル内に output: user-report.html を記載
+usml visualize examples/users-list.usml.yaml
+```
+
+### 10.3 parse - AST確認
+
+```bash
+usml parse <ファイルパス>
+```
+
+USMLファイルをパースして、AST（抽象構文木）の情報を標準出力に表示する。
+
+---
+
+## 11. 今後の拡張候補（v0.2以降）
 
 - **条件付きフィールド**: 特定条件下でのみレスポンスに含まれるフィールド（`include_when` キー）
 - **サブクエリ参照**: スカラーサブクエリや EXISTS チェック

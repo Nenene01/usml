@@ -45,7 +45,8 @@ fn main() {
                 )
                 .arg(
                     Arg::new("output")
-                        .help("出力先HTMLファイルパス")
+                        .help("出力先HTMLファイルパス（デフォルト: ./output/<usecase-name>.html）")
+                        .short('o')
                         .long("output")
                         .value_name("FILE"),
                 ),
@@ -245,13 +246,39 @@ fn cmd_visualize(file_path: &str, output: Option<&String>) {
 
     let html = visualizer::generate_html(&doc);
 
-    if let Some(output_path) = output {
-        if let Err(e) = fs::write(output_path, html) {
-            eprintln!("ファイル書き込みエラー '{}': {}", output_path, e);
+    // 出力先パスを決定
+    let output_path = if let Some(path) = output {
+        // -o オプションが指定されている場合はそれを優先
+        path.clone()
+    } else if let Some(output_name) = &doc.usecase.output {
+        // USMLファイル内のoutputパラメータが指定されている場合
+        let output_dir = "output";
+        if let Err(e) = fs::create_dir_all(output_dir) {
+            eprintln!("ディレクトリ作成エラー '{}': {}", output_dir, e);
             process::exit(1);
         }
-        println!("✓ HTML を出力しました: '{}'", output_path);
+        format!("{}/{}", output_dir, output_name)
     } else {
-        println!("{}", html);
+        // デフォルト: ./output/<usecase-name>.html
+        let output_dir = "output";
+        if let Err(e) = fs::create_dir_all(output_dir) {
+            eprintln!("ディレクトリ作成エラー '{}': {}", output_dir, e);
+            process::exit(1);
+        }
+
+        // ユースケース名からファイル名を生成（スペースや特殊文字を置換）
+        let safe_name = doc
+            .usecase
+            .name
+            .chars()
+            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+            .collect::<String>();
+        format!("{}/{}.html", output_dir, safe_name)
+    };
+
+    if let Err(e) = fs::write(&output_path, html) {
+        eprintln!("ファイル書き込みエラー '{}': {}", output_path, e);
+        process::exit(1);
     }
+    println!("✓ HTML を出力しました: '{}'", output_path);
 }
