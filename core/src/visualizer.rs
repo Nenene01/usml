@@ -16,17 +16,27 @@ struct FieldEntry {
     join_type: String,
 }
 
+struct TableContext {
+    columns: HashMap<String, HashSet<String>>,
+    order: Vec<String>,
+    seen: HashSet<String>,
+    alias_map: HashMap<String, String>,
+}
+
 pub fn generate_html(doc: &UsmlDocument) -> String {
     let transform_map = build_transform_map(&doc.usecase.transforms);
-    let mut table_order = extract_import_tables(doc);
-    let mut table_seen: HashSet<String> = table_order.iter().cloned().collect();
-    let mut table_columns: HashMap<String, HashSet<String>> = table_order
-        .iter()
-        .cloned()
-        .map(|table| (table, HashSet::new()))
-        .collect();
+    let table_order = extract_import_tables(doc);
+    let mut table_ctx = TableContext {
+        columns: table_order
+            .iter()
+            .cloned()
+            .map(|table| (table, HashSet::new()))
+            .collect(),
+        order: table_order.clone(),
+        seen: table_order.iter().cloned().collect(),
+        alias_map: HashMap::new(),
+    };
     let mut entries = Vec::new();
-    let mut alias_map: HashMap<String, String> = HashMap::new(); // alias -> actual table name
 
     collect_entries(
         &doc.usecase.response_mapping,
@@ -34,10 +44,7 @@ pub fn generate_html(doc: &UsmlDocument) -> String {
         "",
         &transform_map,
         &mut entries,
-        &mut table_columns,
-        &mut table_order,
-        &mut table_seen,
-        &mut alias_map,
+        &mut table_ctx,
     );
 
     let mut html = String::new();
@@ -125,30 +132,30 @@ pub fn generate_html(doc: &UsmlDocument) -> String {
     }
 
     // OpenAPI情報を表示
-    if let Some(openapi_ref) = &doc.import.openapi {
-        if let Some((_file, path, method, status)) = resolver::openapi::parse_openapi_ref(openapi_ref) {
-            html.push_str("<div class=\"api-info\">\n");
+    if let Some(openapi_ref) = &doc.import.openapi
+        && let Some((_file, path, method, status)) = resolver::openapi::parse_openapi_ref(openapi_ref)
+    {
+        html.push_str("<div class=\"api-info\">\n");
 
-            // HTTPメソッドバッジ
-            let method_upper = method.to_uppercase();
-            let method_class = match method_upper.as_str() {
-                "GET" => "method-get",
-                "POST" => "method-post",
-                "PUT" => "method-put",
-                "DELETE" => "method-delete",
-                "PATCH" => "method-patch",
-                _ => "method-get",
-            };
-            write!(&mut html, "<span class=\"method-badge {}\">{}</span>", method_class, escape_html(&method_upper)).unwrap();
+        // HTTPメソッドバッジ
+        let method_upper = method.to_uppercase();
+        let method_class = match method_upper.as_str() {
+            "GET" => "method-get",
+            "POST" => "method-post",
+            "PUT" => "method-put",
+            "DELETE" => "method-delete",
+            "PATCH" => "method-patch",
+            _ => "method-get",
+        };
+        write!(&mut html, "<span class=\"method-badge {}\">{}</span>", method_class, escape_html(&method_upper)).unwrap();
 
-            // APIパス
-            write!(&mut html, "<span class=\"api-path\">{}</span>", escape_html(&path)).unwrap();
+        // APIパス
+        write!(&mut html, "<span class=\"api-path\">{}</span>", escape_html(path)).unwrap();
 
-            // ステータスコード
-            write!(&mut html, "<span class=\"status-badge\">Status: {}</span>", escape_html(&status)).unwrap();
+        // ステータスコード
+        write!(&mut html, "<span class=\"status-badge\">Status: {}</span>", escape_html(status)).unwrap();
 
-            html.push_str("</div>\n");
-        }
+        html.push_str("</div>\n");
     }
 
     html.push_str("<div class=\"tabs\">\n");
@@ -269,13 +276,13 @@ pub fn generate_html(doc: &UsmlDocument) -> String {
     html.push_str("</div>\n");
 
     html.push_str("<div class=\"column\">\n<h2>Tables</h2>\n");
-    if table_order.is_empty() {
+    if table_ctx.order.is_empty() {
         html.push_str("<div class=\"empty\">No tables imported.</div>");
     } else {
-        for table in &table_order {
-            let columns = table_columns.get(table);
+        for table in &table_ctx.order {
+            let columns = table_ctx.columns.get(table);
             // エイリアスかどうかを判定
-            let display_name = if let Some(actual_table) = alias_map.get(table) {
+            let display_name = if let Some(actual_table) = table_ctx.alias_map.get(table) {
                 format!("{} <span style=\"color: #6b7280; font-weight: 400;\">(as {})</span>", actual_table, table)
             } else {
                 table.clone()
@@ -309,7 +316,7 @@ pub fn generate_html(doc: &UsmlDocument) -> String {
 
     // テーブルビュー
     html.push_str("<div id=\"table-view\" class=\"view active\">\n");
-    generate_table_view(&mut html, &entries, &table_order, &table_columns, doc, &alias_map);
+    generate_table_view(&mut html, &entries, &table_ctx, doc);
     html.push_str("</div>\n");
 
     html.push_str("</div>\n"); // main-content の終了
@@ -402,10 +409,7 @@ fn collect_entries(
     parent_path: &str,
     transform_map: &HashMap<String, Vec<String>>,
     entries: &mut Vec<FieldEntry>,
-    table_columns: &mut HashMap<String, HashSet<String>>,
-    table_order: &mut Vec<String>,
-    table_seen: &mut HashSet<String>,
-    alias_map: &mut HashMap<String, String>,
+    table_ctx: &mut TableContext,
 ) {
     for mapping in mappings {
         let mut badges = Vec::new();
@@ -421,7 +425,7 @@ fn collect_entries(
             let join_type = join.r#type.as_deref().unwrap_or("JOIN");
             let table_part = if let Some(alias) = &join.alias {
                 // エイリアスマッピングを記録
-                alias_map.insert(alias.clone(), join.table.clone());
+                table_ctx.alias_map.insert(alias.clone(), join.table.clone());
                 format!("{} AS {}", join.table, alias)
             } else {
                 join.table.clone()
@@ -495,37 +499,38 @@ fn collect_entries(
         });
 
         // テーブルとカラムの情報を記録
-        if let Some(source) = &mapping.source {
-            if let Some((table, column)) = source.split_once('.') {
-                let table = table.to_string();
-                let column = column.to_string();
+        if let Some(source) = &mapping.source
+            && let Some((table, column)) = source.split_once('.')
+        {
+            let table = table.to_string();
+            let column = column.to_string();
 
-                table_columns
-                    .entry(table.clone())
-                    .or_insert_with(HashSet::new)
-                    .insert(column);
+            table_ctx
+                .columns
+                .entry(table.clone())
+                .or_default()
+                .insert(column);
 
-                if table_seen.insert(table.clone()) {
-                    table_order.push(table);
-                }
+            if table_ctx.seen.insert(table.clone()) {
+                table_ctx.order.push(table);
             }
         }
 
         // JOIN、JOIN chainのテーブルも記録（カラムなし）
         if let Some(join) = &mapping.join {
             let table = join.table.clone();
-            table_columns.entry(table.clone()).or_insert_with(HashSet::new);
-            if table_seen.insert(table.clone()) {
-                table_order.push(table);
+            table_ctx.columns.entry(table.clone()).or_default();
+            if table_ctx.seen.insert(table.clone()) {
+                table_ctx.order.push(table);
             }
         }
 
         if let Some(chain) = &mapping.join_chain {
             for entry in chain {
                 let table = entry.table.clone();
-                table_columns.entry(table.clone()).or_insert_with(HashSet::new);
-                if table_seen.insert(table.clone()) {
-                    table_order.push(table);
+                table_ctx.columns.entry(table.clone()).or_default();
+                if table_ctx.seen.insert(table.clone()) {
+                    table_ctx.order.push(table);
                 }
             }
         }
@@ -543,10 +548,7 @@ fn collect_entries(
                 &current_field_path,
                 transform_map,
                 entries,
-                table_columns,
-                table_order,
-                table_seen,
-                alias_map,
+                table_ctx,
             );
         }
     }
@@ -563,10 +565,8 @@ fn depth_class(depth: usize) -> String {
 fn generate_table_view(
     html: &mut String,
     entries: &[FieldEntry],
-    table_order: &[String],
-    table_columns: &HashMap<String, HashSet<String>>,
+    table_ctx: &TableContext,
     doc: &UsmlDocument,
-    alias_map: &HashMap<String, String>,
 ) {
     // Response Mapping Table
     html.push_str("<div class=\"table-section\"><h2>Response Mapping</h2>\n");
@@ -634,16 +634,16 @@ fn generate_table_view(
     html.push_str("<div class=\"table-section\"><h2>Tables Summary</h2>\n");
     html.push_str("<table><thead><tr><th>Table</th><th>Columns</th></tr></thead><tbody>\n");
 
-    for table in table_order {
+    for table in &table_ctx.order {
         // エイリアスかどうかを判定
-        let display_name = if let Some(actual_table) = alias_map.get(table) {
+        let display_name = if let Some(actual_table) = table_ctx.alias_map.get(table) {
             format!("<strong>{}</strong> <span style=\"color: #6b7280; font-weight: 400;\">(as {})</span>", escape_html(actual_table), escape_html(table))
         } else {
             format!("<strong>{}</strong>", escape_html(table))
         };
         write!(html, "<tr><td>{}</td>", display_name).unwrap();
 
-        if let Some(cols) = table_columns.get(table) && !cols.is_empty() {
+        if let Some(cols) = table_ctx.columns.get(table) && !cols.is_empty() {
             let mut sorted_cols: Vec<_> = cols.iter().collect();
             sorted_cols.sort();
             let cols_html = sorted_cols.iter().map(|c| format!("<code class=\"inline\">{}</code>", escape_html(c))).collect::<Vec<_>>().join(", ");
@@ -717,10 +717,10 @@ fn generate_table_view(
             if let Some(fallback) = &transform.fallback {
                 details.push(format!("fallback: <code class=\"inline\">{}</code>", escape_html(fallback)));
             }
-            if let Some(when) = &transform.when {
-                if !when.is_empty() {
-                    details.push(format!("when: {} conditions", when.len()));
-                }
+            if let Some(when) = &transform.when
+                && !when.is_empty()
+            {
+                details.push(format!("when: {} conditions", when.len()));
             }
 
             let details_html = if details.is_empty() {
