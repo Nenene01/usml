@@ -22,4 +22,4 @@ jobs:
       - name: Lint (clippy)
         run: cargo clippy --workspace -- -D warnings
       - name: Format check
-        run: cargo fmt --workspace --check
+        run: cargo fmt --all --check
