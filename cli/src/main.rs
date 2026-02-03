@@ -271,7 +271,13 @@ fn cmd_visualize(file_path: &str, output: Option<&String>) {
             .usecase
             .name
             .chars()
-            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '-'
+                }
+            })
             .collect::<String>();
         format!("{}/{}.html", output_dir, safe_name)
     };

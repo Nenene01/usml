@@ -6,7 +6,7 @@ use crate::resolver;
 
 struct FieldEntry {
     field: String,
-    field_path: String, // フルパス（例: "comments.id"）
+    field_path: String,     // フルパス（例: "comments.id"）
     source: Option<String>, // 元のsource（例: "posts.id"）
     badges: Vec<String>,
     join_lines: Vec<String>,
@@ -111,7 +111,9 @@ pub fn generate_html(doc: &UsmlDocument) -> String {
     html.push_str(".legend-line { width: 28px; height: 3px; border-radius: 2px; }\n");
     html.push_str("table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }\n");
     html.push_str("thead { background: #374151; color: #fff; }\n");
-    html.push_str("th { padding: 12px 16px; text-align: left; font-weight: 600; font-size: 0.9rem; }\n");
+    html.push_str(
+        "th { padding: 12px 16px; text-align: left; font-weight: 600; font-size: 0.9rem; }\n",
+    );
     html.push_str("td { padding: 12px 16px; border-bottom: 1px solid #e5e7eb; }\n");
     html.push_str("tbody tr:last-child td { border-bottom: none; }\n");
     html.push_str("tbody tr:hover { background: #f9fafb; }\n");
@@ -128,12 +130,18 @@ pub fn generate_html(doc: &UsmlDocument) -> String {
     html.push_str("<div class=\"header\">\n");
     write!(&mut html, "<h1>{}</h1>", escape_html(&doc.usecase.name)).unwrap();
     if let Some(summary) = &doc.usecase.summary {
-        write!(&mut html, "<p class=\"summary\">{}</p>", escape_html(summary)).unwrap();
+        write!(
+            &mut html,
+            "<p class=\"summary\">{}</p>",
+            escape_html(summary)
+        )
+        .unwrap();
     }
 
     // OpenAPI情報を表示
     if let Some(openapi_ref) = &doc.import.openapi
-        && let Some((_file, path, method, status)) = resolver::openapi::parse_openapi_ref(openapi_ref)
+        && let Some((_file, path, method, status)) =
+            resolver::openapi::parse_openapi_ref(openapi_ref)
     {
         html.push_str("<div class=\"api-info\">\n");
 
@@ -147,13 +155,29 @@ pub fn generate_html(doc: &UsmlDocument) -> String {
             "PATCH" => "method-patch",
             _ => "method-get",
         };
-        write!(&mut html, "<span class=\"method-badge {}\">{}</span>", method_class, escape_html(&method_upper)).unwrap();
+        write!(
+            &mut html,
+            "<span class=\"method-badge {}\">{}</span>",
+            method_class,
+            escape_html(&method_upper)
+        )
+        .unwrap();
 
         // APIパス
-        write!(&mut html, "<span class=\"api-path\">{}</span>", escape_html(path)).unwrap();
+        write!(
+            &mut html,
+            "<span class=\"api-path\">{}</span>",
+            escape_html(path)
+        )
+        .unwrap();
 
         // ステータスコード
-        write!(&mut html, "<span class=\"status-badge\">Status: {}</span>", escape_html(status)).unwrap();
+        write!(
+            &mut html,
+            "<span class=\"status-badge\">Status: {}</span>",
+            escape_html(status)
+        )
+        .unwrap();
 
         html.push_str("</div>\n");
     }
@@ -209,7 +233,9 @@ pub fn generate_html(doc: &UsmlDocument) -> String {
     html.push_str("</div>\n");
 
     html.push_str("<div class=\"column\">\n<h2>Joins &amp; Transforms</h2>\n");
-    let has_joins_or_transforms = entries.iter().any(|e| !e.join_lines.is_empty() || !e.transforms.is_empty());
+    let has_joins_or_transforms = entries
+        .iter()
+        .any(|e| !e.join_lines.is_empty() || !e.transforms.is_empty());
     if !has_joins_or_transforms {
         html.push_str("<div class=\"empty\">No joins or transforms.</div>");
     } else {
@@ -283,7 +309,10 @@ pub fn generate_html(doc: &UsmlDocument) -> String {
             let columns = table_ctx.columns.get(table);
             // エイリアスかどうかを判定
             let display_name = if let Some(actual_table) = table_ctx.alias_map.get(table) {
-                format!("{} <span style=\"color: #6b7280; font-weight: 400;\">(as {})</span>", actual_table, table)
+                format!(
+                    "{} <span style=\"color: #6b7280; font-weight: 400;\">(as {})</span>",
+                    actual_table, table
+                )
             } else {
                 table.clone()
             };
@@ -295,10 +324,14 @@ pub fn generate_html(doc: &UsmlDocument) -> String {
             )
             .unwrap();
 
-            if let Some(cols) = columns && !cols.is_empty() {
+            if let Some(cols) = columns
+                && !cols.is_empty()
+            {
                 let mut sorted_cols: Vec<_> = cols.iter().collect();
                 sorted_cols.sort();
-                html.push_str("<div class=\"join-line\">Columns:</div><div style=\"margin-top: 4px;\">");
+                html.push_str(
+                    "<div class=\"join-line\">Columns:</div><div style=\"margin-top: 4px;\">",
+                );
                 for (i, col) in sorted_cols.iter().enumerate() {
                     if i > 0 {
                         html.push_str(", ");
@@ -425,7 +458,9 @@ fn collect_entries(
             let join_type = join.r#type.as_deref().unwrap_or("JOIN");
             let table_part = if let Some(alias) = &join.alias {
                 // エイリアスマッピングを記録
-                table_ctx.alias_map.insert(alias.clone(), join.table.clone());
+                table_ctx
+                    .alias_map
+                    .insert(alias.clone(), join.table.clone());
                 format!("{} AS {}", join.table, alias)
             } else {
                 join.table.clone()
@@ -589,7 +624,12 @@ fn generate_table_view(
         } else {
             entry.field.clone()
         };
-        write!(html, "<td><code class=\"inline\">{}</code></td>", escape_html(&field_display)).unwrap();
+        write!(
+            html,
+            "<td><code class=\"inline\">{}</code></td>",
+            escape_html(&field_display)
+        )
+        .unwrap();
 
         // Source - mapping.sourceまたはtables列から推定
         let source = if let Some(src) = &entry.source {
@@ -619,7 +659,12 @@ fn generate_table_view(
 
         // Transforms
         let transform_str = if !entry.transforms.is_empty() {
-            entry.transforms.iter().map(|t| format!("<code class=\"inline\">{}</code>", escape_html(t))).collect::<Vec<_>>().join(", ")
+            entry
+                .transforms
+                .iter()
+                .map(|t| format!("<code class=\"inline\">{}</code>", escape_html(t)))
+                .collect::<Vec<_>>()
+                .join(", ")
         } else {
             "-".to_string()
         };
@@ -637,16 +682,26 @@ fn generate_table_view(
     for table in &table_ctx.order {
         // エイリアスかどうかを判定
         let display_name = if let Some(actual_table) = table_ctx.alias_map.get(table) {
-            format!("<strong>{}</strong> <span style=\"color: #6b7280; font-weight: 400;\">(as {})</span>", escape_html(actual_table), escape_html(table))
+            format!(
+                "<strong>{}</strong> <span style=\"color: #6b7280; font-weight: 400;\">(as {})</span>",
+                escape_html(actual_table),
+                escape_html(table)
+            )
         } else {
             format!("<strong>{}</strong>", escape_html(table))
         };
         write!(html, "<tr><td>{}</td>", display_name).unwrap();
 
-        if let Some(cols) = table_ctx.columns.get(table) && !cols.is_empty() {
+        if let Some(cols) = table_ctx.columns.get(table)
+            && !cols.is_empty()
+        {
             let mut sorted_cols: Vec<_> = cols.iter().collect();
             sorted_cols.sort();
-            let cols_html = sorted_cols.iter().map(|c| format!("<code class=\"inline\">{}</code>", escape_html(c))).collect::<Vec<_>>().join(", ");
+            let cols_html = sorted_cols
+                .iter()
+                .map(|c| format!("<code class=\"inline\">{}</code>", escape_html(c)))
+                .collect::<Vec<_>>()
+                .join(", ");
             write!(html, "<td>{}</td>", cols_html).unwrap();
         } else {
             html.push_str("<td style=\"color: #9ca3af;\">No columns referenced</td>");
@@ -663,18 +718,37 @@ fn generate_table_view(
         html.push_str("<table><thead><tr><th>Parameter</th><th>Maps To</th><th>Details</th></tr></thead><tbody>\n");
 
         for filter in &doc.usecase.filters {
-            write!(html, "<tr><td><code class=\"inline\">{}</code></td>", escape_html(&filter.param)).unwrap();
-            write!(html, "<td><strong>{}</strong></td>", escape_html(&filter.maps_to)).unwrap();
+            write!(
+                html,
+                "<tr><td><code class=\"inline\">{}</code></td>",
+                escape_html(&filter.param)
+            )
+            .unwrap();
+            write!(
+                html,
+                "<td><strong>{}</strong></td>",
+                escape_html(&filter.maps_to)
+            )
+            .unwrap();
 
             let mut details = Vec::new();
             if let Some(condition) = &filter.condition {
-                details.push(format!("<code class=\"inline\">{}</code>", escape_html(condition)));
+                details.push(format!(
+                    "<code class=\"inline\">{}</code>",
+                    escape_html(condition)
+                ));
             }
             if let Some(strategy) = &filter.strategy {
-                details.push(format!("strategy: <code class=\"inline\">{}</code>", escape_html(strategy)));
+                details.push(format!(
+                    "strategy: <code class=\"inline\">{}</code>",
+                    escape_html(strategy)
+                ));
             }
             if let Some(page_size) = filter.page_size {
-                details.push(format!("page_size: <code class=\"inline\">{}</code>", page_size));
+                details.push(format!(
+                    "page_size: <code class=\"inline\">{}</code>",
+                    page_size
+                ));
             }
 
             let details_html = if details.is_empty() {
@@ -696,12 +770,26 @@ fn generate_table_view(
         html.push_str("<table><thead><tr><th>Target</th><th>Type</th><th>Sources</th><th>Details</th></tr></thead><tbody>\n");
 
         for transform in &doc.usecase.transforms {
-            write!(html, "<tr><td><code class=\"inline\">{}</code></td>", escape_html(&transform.target)).unwrap();
-            write!(html, "<td><strong>{}</strong></td>", escape_html(&transform.r#type)).unwrap();
+            write!(
+                html,
+                "<tr><td><code class=\"inline\">{}</code></td>",
+                escape_html(&transform.target)
+            )
+            .unwrap();
+            write!(
+                html,
+                "<td><strong>{}</strong></td>",
+                escape_html(&transform.r#type)
+            )
+            .unwrap();
 
             // Sources
             let sources_html = if let Some(sources) = &transform.sources {
-                sources.iter().map(|s| format!("<code class=\"inline\">{}</code>", escape_html(s))).collect::<Vec<_>>().join(", ")
+                sources
+                    .iter()
+                    .map(|s| format!("<code class=\"inline\">{}</code>", escape_html(s)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             } else if let Some(source) = &transform.source {
                 format!("<code class=\"inline\">{}</code>", escape_html(source))
             } else {
@@ -712,10 +800,16 @@ fn generate_table_view(
             // Details
             let mut details = Vec::new();
             if let Some(separator) = &transform.separator {
-                details.push(format!("separator: <code class=\"inline\">{}</code>", escape_html(separator)));
+                details.push(format!(
+                    "separator: <code class=\"inline\">{}</code>",
+                    escape_html(separator)
+                ));
             }
             if let Some(fallback) = &transform.fallback {
-                details.push(format!("fallback: <code class=\"inline\">{}</code>", escape_html(fallback)));
+                details.push(format!(
+                    "fallback: <code class=\"inline\">{}</code>",
+                    escape_html(fallback)
+                ));
             }
             if let Some(when) = &transform.when
                 && !when.is_empty()
@@ -842,5 +936,4 @@ mod tests {
         assert!(html.contains("COALESCE"));
         assert!(html.contains("profiles"));
     }
-
 }
