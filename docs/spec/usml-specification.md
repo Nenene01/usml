@@ -1,384 +1,189 @@
-# USML Specification v0.1
+# USML Specification v0.2
 
-> **Usecase Markup Language** — OpenAPI と DBML の間を埋め、APIユースケースレベルのデータフローを声明的に定義する言語。
+> **Usecase Markup Language** — OpenAPI（インターフェース層）と DBML（DB定義）の間に **ドメイン層を第一級概念として導入** し、4層レイヤードアーキテクチャの各境界のマッピング・変換を声明的に定義する言語。
+
+**ステータス:** 正式版（v0.2）。本ドキュメントは v0.1 からの**破壊的変更**を含む（後方互換なし）。v0.1 の仕様内容は git 履歴を参照。
 
 ---
 
-## 1. 目的と動機
+## 1. v0.1 の問題と v0.2 の狙い
 
-### 現在の問題
+### 1.1 v0.1 の構造的問題
 
-| ツール | 強み | ギャップ |
+v0.1 の `response_mapping` は、APIレスポンスフィールドを **DBテーブル.カラムへ直結**していた。
+
+```yaml
+# v0.1
+- field: avatar_url          # Interface 層 (OpenAPI DTO)
+  source: profiles.avatar_url  # Infrastructure 層 (DBカラム)
+```
+
+これは図に当てはめると、Interface と Infrastructure を直結し、**UseCase 層と Domain 層が言語上に存在しない**状態だった。名前は "Usecase ML" だが、実態は「Interface ⇄ DB の宣言的マッピング言語」であり、インフラの都合（テーブル分割・JOIN）がそのまま API フィールドへ漏れていた。
+
+```mermaid
+flowchart LR
+    I[Interface] -.->|v0.1 は直結| F[Infrastructure/DB]
+    U[UseCase]:::ghost
+    D[Domain]:::ghost
+    classDef ghost fill:#eee,stroke-dasharray:4,color:#999
+```
+
+### 1.2 v0.2 の設計原則 — 3つの境界を分ける
+
+v0.2 は、1本に圧縮されていたマッピングを **3つの境界**に開く。依存の向きは常に Domain へ向かう。
+
+```mermaid
+flowchart LR
+    I[Interface<br/>OpenAPI DTO] -->|response_mapping| U[UseCase]
+    U --> D[Domain<br/>Entity / Value Object]
+    D -->|persistence| F[Infrastructure<br/>DBML]
+    F -. implements .-> D
+```
+
+| 境界 | USML セクション | 関心事 |
 |---|---|---|
-| OpenAPI | エンドポイント・リクエスト・レスポンス構造 | データの源泉（テーブル・カラム・結合条件）が不明 |
-| DBML | テーブル・カラム・FK関係 | APIとの対応・クエリ意図・変換ロジックが不明 |
+| Domain ⇄ Infrastructure | `domain.entities[].persistence` | テーブル分割の吸収・JOIN・集約（インフラ関心） |
+| Domain 内の導出 | `domain.entities[].derived` | ドメインロジック（デフォルト値・可視性ルール） |
+| Domain ⇄ Interface | `usecase.response_mapping` | ドメイン語彙 → DTO の射影 |
+| Interface の表示変換 | `usecase.presentation` | 表示ラベル・閲覧者文脈のマスキング |
 
-「ユーザー一覧取得API」のレスポンスに `avatar_url` がある場合、OpenAPI では「文字列フィールド」としか定義できない。実際には `profiles` テーブルの `avatar_url` カラムで、`users.id = profiles.user_id` で結合されていることは別のドキュメントを見なければわからない。
-
-### USML の役割
-
-```
-OpenAPI ──┐
-          ├──► USML ──► 視覚化・検証
-DBML ─────┘
-```
-
-USML はOpenAPIやDBMLを**import**し、「1つのAPIリクエストがDBのどのデータを、どのように組み立てて返すか」を声明的に記述する。
+**v0.2 の核心ルール:** `usecase.response_mapping[].source` は **DBカラムを直接参照できない**。必ず**ドメイン語彙**（`User.avatarUrl` のような `Entity.field`）を指す。DBカラムへの対応は `domain` セクションが一手に引き受ける。
 
 ---
 
 ## 2. ファイル構造
 
-USML ファイルは YAML を基にする。拡張子は `.usml.yaml` とする。
-
 ```yaml
-# 基本テンプレート
-version: "0.1"
+version: "0.2"
 
 import:
   openapi: <パス>#<参照先>
   dbml:
     - <パス>#tables["<テーブル名>"]
 
+# v0.2 で新設（必須）
+domain:
+  value_objects:
+    - <VO定義>
+  entities:
+    <エンティティ名>:
+      <ドメイン定義 + persistence + derived>
+
 usecase:
   name: <ユースケース名>
   summary: <説明>
-  output: <出力ファイル名>  # オプション: 可視化HTMLのファイル名
+  output: <出力ファイル名>          # オプション
+  root: <ルートエンティティ名>       # v0.2 で新設
 
-  response_mapping:
+  response_mapping:                # Domain ⇄ Interface（source はドメイン語彙）
     - <マッピング定義>
 
   filters:
     - <フィルタ定義>
 
-  transforms:
-    - <変換定義>
+  presentation:                    # v0.2 で新設（旧 transforms の表示系）
+    - <表示変換定義>
 ```
 
-### 2.1 usecase.output パラメータ
-
-可視化HTMLの出力ファイル名を指定する。
-
-```yaml
-usecase:
-  name: ユーザー一覧取得
-  output: user-list-report.html
-```
-
-- `output`: 出力HTMLファイル名（オプション）
-- 未指定の場合は `<usecase.name>.html` が使用される
-- CLI の `-o/--output` オプションが指定された場合はそちらが優先される
-- 出力ディレクトリは `./output/` 配下となる（詳細は「11. CLI コマンド」を参照）
+`domain` セクションは v0.2 では**必須**。`response_mapping.source` がドメイン語彙を指すため、その語彙を定義する `domain` がないと検証できない。
 
 ---
 
-## 3. Import セクション
+## 3. domain セクション
 
-外部仕様ファイルへの参照を定義する。
+ドメインモデル（エンティティと値オブジェクト）を定義し、各フィールドの**永続化マッピング**と**導出ロジック**を持つ。
 
-### 3.1 OpenAPI Import
+### 3.1 value_objects（値オブジェクト）
+
+ドメインの型を宣言する。OpenAPI のスキーマ型・DBカラム型との**3点整合検証**（§7.2）の基礎になる。
 
 ```yaml
-import:
-  openapi: ./api.yaml#paths["/users"].get.responses["200"]
+domain:
+  value_objects:
+    - name: UserId
+      base: integer
+    - name: Url
+      base: string
+      format: uri
+    - name: Email
+      base: string
+      format: email
 ```
 
-- パス部分は USML 独自の参照記法を使用する
-- `paths["<path>"].<method>` で特定エンドポイント・メソッドを指定
-- `.responses["<ステータスコード>"]` でレスポンスコードを明示する。省略時は `"200"` がデフォルトとなる
-- 参照されたレスポンススキーマが `response_mapping` の検証元になる
+- `name`: VO 名（エンティティのフィールド型として参照される）
+- `base`: 基底型（`string` / `integer` / `number` / `boolean` / `datetime`）
+- `format`: オプションの意味的フォーマット（OpenAPI の `format` と照合可能）
 
-> **参照記法の文法**
-> ```
-> <ファイルパス>#paths["<パス>"].<メソッド>.responses["<ステータスコード>"]
-> ```
-> 例: `./api.yaml#paths["/posts/{post_id}"].get.responses["200"]`
-
-### 3.2 DBML Import
+### 3.2 entities（エンティティ）
 
 ```yaml
-import:
-  dbml:
-    - ./schema.dbml#tables["users"]
-    - ./schema.dbml#tables["profiles"]
+domain:
+  entities:
+    User:
+      fields:
+        id: UserId
+        name: string
+        email: Email
+        avatarUrl: Url
+        displayName: string
+
+      # Domain ⇄ Infrastructure（永続化マッピング）
+      persistence:
+        root_table: users          # このエンティティの基点テーブル
+        columns:
+          id: users.id
+          name: users.name
+          email: users.email
+          avatarUrl:
+            source: profiles.avatar_url
+            join:
+              table: profiles
+              on: users.id = profiles.user_id
+              type: LEFT JOIN
+          displayName:
+            source: profiles.display_name
+            join:
+              table: profiles
+              on: users.id = profiles.user_id
+
+      # Domain 内の導出ロジック（ドメインの語彙だけで完結）
+      derived:
+        - field: displayName
+          type: COALESCE
+          sources:
+            - profiles.display_name
+            - users.name
+          fallback: "anonymous"
 ```
 
-- `tables["<名前>"]` でテーブル単位で参照
-- `tables["<名前>"].columns["<名前>"]` でカラム単位も可
-- 参照されたテーブルが `response_mapping` の結合・ソース元になる
+#### 3.2.1 fields
 
----
+`<フィールド名>: <型>`。型は組み込み型か `value_objects` で定義した VO 名。
 
-## 4. response_mapping セクション
+#### 3.2.2 persistence — Domain ⇄ DB
 
-APIレスポンスの各フィールドとDBカラムの対応を定義する。これがUSMLの核心である。
+- `root_table`: エンティティの基点テーブル。`join` の左辺のデフォルトになる
+- `columns.<field>`: フィールドの永続化先
+  - 単純対応: `users.name`（文字列）
+  - 結合あり: `source` + `join`（v0.1 の `join` と同じ表現力。`alias`・`type` 対応）
+  - 多段結合: `join` + `join_chain`（v0.1 §4.5 と同じ）
+  - 集約: `source` + `join` + `aggregate`（v0.1 §4.3 と同じ。1対多の `COUNT`/`SUM` 等）
 
-### 4.1 単純対応（1テーブル・1カラム）
+**v0.1 の JOIN・集約・join_chain・alias はすべて persistence 配下へ移動する。** これらはインフラ関心（テーブルがどう分割・正規化されているか）であり、ドメインやインターフェースが知るべきことではない。
 
-```yaml
-response_mapping:
-  - field: id
-    source: users.id
-  - field: name
-    source: users.name
-```
+#### 3.2.3 derived — ドメイン導出
 
-- `field`: レスポンスのフィールド名（OpenAPIのレスポンススキーマと照合）
-- `source`: `<テーブル名>.<カラム名>` 形式
+**ドメインの語彙だけで完結する**値の導出を定義する。v0.1 transforms のうち、ドメインロジックに属するものをここへ置く。
 
-### 4.2 結合あり
-
-別テーブルのカラムを使うときは `join` を添付する。
+| 種別 | 用途 | 例 |
+|---|---|---|
+| `COALESCE` | デフォルト値・フォールバック | `displayName = display_name ?? name ?? "anonymous"` |
+| `CONDITIONAL_SOURCE` | 可視性のドメインルール | 下書きなら本文の代わりにプレビューを返す |
+| `CONCAT` | 値の合成 | `fullName = firstName + " " + lastName` |
 
 ```yaml
-response_mapping:
-  - field: avatar_url
-    source: profiles.avatar_url
-    join:
-      table: profiles
-      on: users.id = profiles.user_id
-      type: LEFT JOIN  # デフォルトは LEFT JOIN
-```
-
-- `on`: 結合条件（式として記述）
-- `type`: `INNER JOIN` / `LEFT JOIN` / `RIGHT JOIN`（デフォルト: `LEFT JOIN`）
-- `alias`: テーブルのエイリアス名。同じテーブルを異なる結合条件で複数回参照する場合に必要
-- 同じ `join.table`（かつエイリアス無し）が複数マッピングに出る場合は、最初の定義で統一される
-- 異なる `on` 条件で同テーブルを参照する場合は、必ず `alias` を指定し、`source` でもエイリアス名を使用する
-
-エイリアスの使用例：
-
-```yaml
-response_mapping:
-  # 投稿著者
-  - field: author_name
-    source: post_author.name
-    join:
-      table: users
-      alias: post_author
-      on: posts.user_id = post_author.id
-  # コメント著者（同じusersテーブルだが別の結合条件）
-  - field: last_comment_author
-    source: comment_author.name
-    join:
-      table: users
-      alias: comment_author
-      on: posts.last_comment_user_id = users.id
-```
-
-### 4.3 集約参照
-
-1対多の関係で集約が必要なケース。
-
-```yaml
-response_mapping:
-  - field: comment_count
-    source: comments.id
-    join:
-      table: comments
-      on: posts.id = comments.post_id
-    aggregate:
-      type: COUNT
-      group_by: posts.id
-```
-
-- `aggregate.type`: `COUNT` / `SUM` / `AVG` / `MIN` / `MAX`
-- `aggregate.group_by`: 集約の GROUP BY キーを明示する。省略時はルートテーブルの主キーを自動で適用する
-- `aggregate` とJOINは組み合わせ可能
-
-### 4.4 配列フィールド
-
-ネストされた配列レスポンスの場合。
-
-```yaml
-response_mapping:
-  - field: comments
-    type: array
-    source_table: comments
-    join:
-      table: comments
-      on: posts.id = comments.post_id
-    fields:
-      - field: id
-        source: comments.id
-      - field: body
-        source: comments.body
-      - field: author_name
-        source: users.name
-        join:
-          table: users
-          on: comments.user_id = users.id
-```
-
-- `type: array` で配列レスポンスを示す
-- `source_table`: 配列の要素を生成するテーブル名。`fields` 内の `source` のデフォルトテーブルとなる
-- `join`: ルートテーブルとの結合条件を定義する
-- `fields`: 配列の各要素のマッピングを再帰的に定義する。ネスト内でも `join` を使用可能
-
-### 4.5 多段結合（join_chain）
-
-中間テーブルを経じて別テーブルに結合する場合、`join_chain` を使用する。
-
-```yaml
-response_mapping:
-  - field: tags
-    type: array
-    source_table: tags
-    join:
-      table: post_tags
-      on: posts.id = post_tags.post_id
-    join_chain:
-      - table: tags
-        on: post_tags.tag_id = tags.id
-    fields:
-      - field: id
-        source: tags.id
-      - field: name
-        source: tags.name
-```
-
-- `join_chain`: `join` の次に続く結合を順序付きで定義する
-- 各エントリは `table` と `on` で構成される
-- 結合の実行順序: `join` → `join_chain[0]` → `join_chain[1]` → …
-- 上記の例では `posts → post_tags → tags` という3テーブルの結合を表現する
-
----
-
-## 5. filters セクション
-
-リクエストパラメータがDBクエリのどの部分になるかを定義する。
-
-### 5.1 WHERE 条件
-
-```yaml
-filters:
-  - param: status
-    maps_to: WHERE
-    condition: users.status = :status
-```
-
-- `param`: リクエストパラメータ名（OpenAPIのパラメータと照合）
-- `maps_to: WHERE` で WHERE 句への対応を示す
-- `condition` で実際の条件式を記述（`:status` はパラメータのバインド）
-
-### 5.2 ページネーション
-
-```yaml
-filters:
-  - param: page
-    maps_to: PAGINATION
-    strategy: offset
-    page_size: 20
-    limit_param: limit       # オプション: ページサイズを動的に指定するパラメータ
-    max_page_size: 100       # オプション: ページサイズの上限
-    cursor_field: created_at # カーソルベース時のキー（strategy: cursor 時のみ）
-```
-
-- `maps_to: PAGINATION` でページネーション戦略を示す
-- `strategy`: `offset`（LIMIT/OFFSET）/ `cursor`（カーソルベース）
-- `page_size`: デフォルトのページサイズ
-- `limit_param`: ページサイズを動的に変更するためのパラメータ名。指定されたら OpenAPI のパラメータと照合される
-- `max_page_size`: 動的ページサイズの上限値。超過時はバリデーションエラーとなる
-- `cursor_field`: `strategy: cursor` の場合、カーソルとなるカラム名を指定する
-
-### 5.3 ソート
-
-```yaml
-filters:
-  - param: sort
-    maps_to: ORDER_BY
-    default_column: users.created_at
-    default_direction: DESC
-    allowed_columns:         # 許容するソート対象カラム一覧
-      - users.created_at
-      - users.name
-      - users.id
-    allowed_directions: [ASC, DESC]
-```
-
-- `default_column`: ソートカラムが指定されない場合のデフォルト
-- `allowed_columns`: 動的カラム指定で許容するカラム一覧。リスト外のカラムを指定した場合はバリデーションエラーとなる
-- `allowed_directions`: 許容する並び順
-
----
-
-## 6. transforms セクション
-
-`response_mapping` で定義されたフィールドの値を変換・加工する。
-
-**優先度規則**: `transforms[].target` と `response_mapping[].field` が同じフィールド名の場合、transforms の結果が最終値となる。つまり `response_mapping` で定義した `source` の値にトランスフォーム変換を適用した結果がレスポンスに返される。
-
-### 6.1 COALESCE（NULL時のフォールバック）
-
-```yaml
-transforms:
-  - target: display_name
-    type: COALESCE
-    sources:
-      - profiles.display_name
-      - users.name
-    fallback: "anonymous"
-```
-
-- `sources`: 評価順序に従って左から順に NULL でない値を返す
-- `fallback`: 全て NULL の場合の固定値
-
-### 6.2 文字列加工
-
-```yaml
-transforms:
-  - target: full_name
-    type: CONCAT
-    sources:
-      - users.first_name
-      - users.last_name
-    separator: " "
-```
-
-### 6.3 条件分岐
-
-```yaml
-transforms:
-  - target: status_label
-    type: CASE
-    source: users.status
-    when:
-      - value: "active"
-        then: "アクティブ"
-      - value: "suspended"
-        then: "停止中"
-    else: "不明"
-```
-
-### 6.4 条件付き変換
-
-リクエストパラメータやデータの状態に応じて変換を適用するかどうかを制御する。
-
-```yaml
-transforms:
-  - target: masked_email
-    type: MASK
-    source: users.email
-    mask_pattern: "***@***.***"
-    when:
-      # リクエストパラメータによる条件
-      - param: viewer_role
-        operator: "!="
-        value: "admin"
-```
-
-- `when`: 変換を適用する条件。複数列記すと AND で評価する
-- `when[].param`: リクエストパラメータ名を参照する場合
-- `when[].field`: レスポンスの別フィールド値を参照する場合
-- `when[].source`: DBカラム値を参照する場合
-- `when[].operator`: `==` / `!=` / `>` / `<` / `>=` / `<=` / `in` / `not_in`
-- `when` が false の場合、`source` の元の値がそのまま返される
-
-データ状態による条件付き変換の例：
-
-```yaml
-transforms:
-  - target: body_content
+derived:
+  - field: bodyContent
     type: CONDITIONAL_SOURCE
     when:
       - source: posts.status
@@ -388,16 +193,192 @@ transforms:
     else_source: posts.body
 ```
 
-- `then_source` / `else_source`: 条件に応じて異なるカラム値を返す
+判定基準: **閲覧者（リクエスト文脈）や表示形式に依存しないなら derived（ドメイン）**。依存するなら presentation（§5.3）。
+
+### 3.3 エンティティ間の関連
+
+1対多・多対多の関連は、子エンティティを別エンティティとして定義し、`relations` で結ぶ。
+
+```yaml
+domain:
+  entities:
+    Post:
+      fields:
+        id: PostId
+        title: string
+        likeCount: integer
+      persistence:
+        root_table: posts
+        columns:
+          id: posts.id
+          title: posts.title
+          likeCount:
+            source: likes.id
+            join:
+              table: likes
+              on: posts.id = likes.post_id
+            aggregate:
+              type: COUNT
+              group_by: posts.id
+      relations:
+        comments:
+          target: Comment
+          kind: has_many
+          on: posts.id = comments.post_id
+        tags:
+          target: Tag
+          kind: many_to_many
+          through:
+            table: post_tags
+            on: posts.id = post_tags.post_id
+          on: post_tags.tag_id = tags.id
+
+    Comment:
+      fields:
+        id: CommentId
+        body: string
+        authorName: string
+        createdAt: datetime
+      persistence:
+        root_table: comments
+        columns:
+          id: comments.id
+          body: comments.body
+          authorName:
+            source: comment_author.name
+            join:
+              table: users
+              alias: comment_author
+              on: comments.user_id = users.id
+          createdAt: comments.created_at
+```
+
+- `kind`: `has_many` / `has_one` / `belongs_to` / `many_to_many`
+- `through`: 多対多の中間テーブル（v0.1 の `join_chain` 相当をドメイン関連として表現）
 
 ---
 
-## 7. 完全なサンプル
+## 4. usecase.response_mapping — Domain ⇄ Interface
 
-### 7.1 ユーザー一覧取得
+APIレスポンスの各フィールドが、**どのドメインフィールド**から来るかを定義する。`source` は必ずドメイン語彙。
 
 ```yaml
-version: "0.1"
+usecase:
+  root: User             # ルートエンティティ
+  response_mapping:
+    - field: id
+      source: User.id
+    - field: avatar_url
+      source: User.avatarUrl
+    - field: display_name
+      source: User.displayName
+```
+
+- `source: <Entity>.<field>` 形式。`<field>` は `domain.entities[].fields` に存在する必要がある（§7 規則）
+- JOIN・集約・transform は **書かない**（すべて domain 側が解決済み）。response_mapping は純粋な「ドメイン → DTO」の射影に徹する
+
+### 4.1 配列フィールド（関連の展開）
+
+```yaml
+response_mapping:
+  - field: comments
+    type: array
+    source: Post.comments        # relations の名前を指す
+    fields:
+      - field: id
+        source: Comment.id
+      - field: body
+        source: Comment.body
+      - field: author_name
+        source: Comment.authorName
+      - field: created_at
+        source: Comment.createdAt
+  - field: tags
+    type: array
+    source: Post.tags
+    fields:
+      - field: id
+        source: Tag.id
+      - field: name
+        source: Tag.name
+```
+
+- `source` が `relations` を指すとき、`fields` はその関連先エンティティの射影
+- v0.1 の `source_table` / `join` / `join_chain`（配列定義内のインフラ詳細）は不要になる
+
+---
+
+## 5. filters / presentation
+
+### 5.1 filters
+
+v0.1 と同じ（WHERE / PAGINATION / ORDER_BY）。ただし `condition`・`default_column`・`allowed_columns` 等で参照する対象は、**ドメイン語彙**を推奨する（例: `User.status = :status`）。USML がドメイン → DB 解決を行うため、DBカラム名を直接書く必要がなくなる。
+
+```yaml
+filters:
+  - param: status
+    maps_to: WHERE
+    condition: User.status = :status
+  - param: page
+    maps_to: PAGINATION
+    strategy: offset
+    page_size: 20
+  - param: sort
+    maps_to: ORDER_BY
+    default_column: User.createdAt
+    default_direction: DESC
+    allowed_columns: [User.createdAt, User.name, User.id]
+```
+
+### 5.2 presentation — Interface の表示変換
+
+旧 `transforms` のうち、**閲覧者文脈や表示形式に依存する**ものをここへ置く。`target` はレスポンスフィールド名（response_mapping の field）。
+
+```yaml
+presentation:
+  - target: email
+    type: MASK
+    mask_pattern: "***@***.***"
+    condition:                  # 適用条件（param/operator/value、複数列記で AND）
+      - param: viewer_role
+        operator: "!="
+        value: "admin"
+  - target: status_label
+    type: CASE
+    source: User.status
+    when:                       # CASE の分岐（value/then）
+      - value: "active"
+        then: "アクティブ"
+      - value: "suspended"
+        then: "停止中"
+    else: "不明"
+```
+
+| 種別 | 帰属の理由 |
+|---|---|
+| `MASK` (viewer_role 条件) | 閲覧者の権限に依存する表示制御 |
+| `CASE` (表示ラベル) | 表示用の言語・文言。ドメインの状態は変えない |
+
+> **キーの使い分け**: `presentation` では CASE の分岐を `when:`（`value`/`then`）で、変換の適用条件を `condition:`（`param`/`operator`/`value`）で表す。両者はキーが異なる。
+
+### 5.3 transform 振り分け早見表
+
+| v0.1 transform | v0.2 の置き場所 | 理由 |
+|---|---|---|
+| `COALESCE` | `domain.derived` | 値の導出はドメインの責務 |
+| `CONCAT` | `domain.derived` | 同上 |
+| `CONDITIONAL_SOURCE` | `domain.derived` | 可視性のドメインルール |
+| `MASK`（viewer 条件） | `usecase.presentation` | 閲覧者文脈の表示制御 |
+| `CASE`（表示ラベル） | `usecase.presentation` | 表示用文言 |
+
+---
+
+## 6. 完全なサンプル（v0.2）
+
+### 6.1 ユーザー一覧取得
+
+```yaml
+version: "0.2"
 
 import:
   openapi: ./api.yaml#paths["/users"].get.responses["200"]
@@ -405,47 +386,66 @@ import:
     - ./schema.dbml#tables["users"]
     - ./schema.dbml#tables["profiles"]
 
+domain:
+  value_objects:
+    - { name: UserId, base: integer }
+    - { name: Url, base: string, format: uri }
+    - { name: Email, base: string, format: email }
+  entities:
+    User:
+      fields:
+        id: UserId
+        name: string
+        email: Email
+        avatarUrl: Url
+        displayName: string
+        status: string
+        createdAt: datetime
+      persistence:
+        root_table: users
+        columns:
+          id: users.id
+          name: users.name
+          email: users.email
+          status: users.status
+          createdAt: users.created_at
+          avatarUrl:
+            source: profiles.avatar_url
+            join: { table: profiles, on: users.id = profiles.user_id }
+          displayName:
+            source: profiles.display_name
+            join: { table: profiles, on: users.id = profiles.user_id }
+      derived:
+        - field: displayName
+          type: COALESCE
+          sources: [profiles.display_name, users.name]
+          fallback: "anonymous"
+
 usecase:
   name: ユーザー一覧取得
   summary: ページネーション付きのユーザー一覧を返す
-  output: users-list.html  # オプション: 可視化HTMLのファイル名
-
+  root: User
   response_mapping:
-    - field: id
-      source: users.id
-    - field: name
-      source: users.name
-    - field: email
-      source: users.email
-    - field: avatar_url
-      source: profiles.avatar_url
-      join:
-        table: profiles
-        on: users.id = profiles.user_id
-    - field: display_name
-      source: profiles.display_name
-
+    - { field: id, source: User.id }
+    - { field: name, source: User.name }
+    - { field: email, source: User.email }
+    - { field: avatar_url, source: User.avatarUrl }
+    - { field: display_name, source: User.displayName }
   filters:
-    - param: status
-      maps_to: WHERE
-      condition: users.status = :status
-    - param: page
-      maps_to: PAGINATION
-      strategy: offset
-      page_size: 20
-
-  transforms:
-    - target: display_name
-      type: COALESCE
-      sources:
-        - profiles.display_name
-        - users.name
+    - { param: status, maps_to: WHERE, condition: "User.status = :status" }
+    - { param: page, maps_to: PAGINATION, strategy: offset, page_size: 20 }
+  presentation:
+    - target: email
+      type: MASK
+      mask_pattern: "***@***.***"
+      when:
+        - { param: viewer_role, operator: "!=", value: "admin" }
 ```
 
-### 7.2 投稿詳細取得
+### 6.2 投稿詳細取得（関連・集約・多対多を含む）
 
 ```yaml
-version: "0.1"
+version: "0.2"
 
 import:
   openapi: ./api.yaml#paths["/posts/{post_id}"].get.responses["200"]
@@ -457,217 +457,191 @@ import:
     - ./schema.dbml#tables["tags"]
     - ./schema.dbml#tables["post_tags"]
 
+domain:
+  value_objects:
+    - { name: PostId, base: integer }
+    - { name: CommentId, base: integer }
+    - { name: TagId, base: integer }
+  entities:
+    Post:
+      fields:
+        id: PostId
+        title: string
+        body: string
+        bodyContent: string
+        authorName: string
+        likeCount: integer
+        status: string
+      persistence:
+        root_table: posts
+        columns:
+          id: posts.id
+          title: posts.title
+          body: posts.body
+          status: posts.status
+          authorName:
+            source: users.name
+            join: { table: users, on: posts.user_id = users.id }
+          likeCount:
+            source: likes.id
+            join: { table: likes, on: posts.id = likes.post_id }
+            aggregate: { type: COUNT, group_by: posts.id }
+      derived:
+        - field: bodyContent
+          type: CONDITIONAL_SOURCE
+          when:
+            - { source: posts.status, operator: "==", value: "draft" }
+          then_source: posts.preview_text
+          else_source: posts.body
+      relations:
+        comments:
+          target: Comment
+          kind: has_many
+          on: posts.id = comments.post_id
+        tags:
+          target: Tag
+          kind: many_to_many
+          through: { table: post_tags, on: "posts.id = post_tags.post_id" }
+          on: post_tags.tag_id = tags.id
+    Comment:
+      fields:
+        id: CommentId
+        body: string
+        authorName: string
+        createdAt: datetime
+      persistence:
+        root_table: comments
+        columns:
+          id: comments.id
+          body: comments.body
+          createdAt: comments.created_at
+          authorName:
+            source: comment_author.name
+            join: { table: users, alias: comment_author, on: comments.user_id = users.id }
+    Tag:
+      fields:
+        id: TagId
+        name: string
+      persistence:
+        root_table: tags
+        columns:
+          id: tags.id
+          name: tags.name
+
 usecase:
   name: 投稿詳細取得
   summary: 投稿本文・著者・コメント・いいねCount・タグを返す
-
+  root: Post
   response_mapping:
-    - field: id
-      source: posts.id
-    - field: title
-      source: posts.title
-    - field: body
-      source: posts.body
-    - field: author_name
-      source: users.name
-      join:
-        table: users
-        on: posts.user_id = users.id
-    - field: like_count
-      source: likes.id
-      join:
-        table: likes
-        on: posts.id = likes.post_id
-      aggregate:
-        type: COUNT
-        group_by: posts.id
+    - { field: id, source: Post.id }
+    - { field: title, source: Post.title }
+    - { field: body, source: Post.bodyContent }   # 派生フィールドを射影
+    - { field: author_name, source: Post.authorName }
+    - { field: like_count, source: Post.likeCount }
     - field: tags
       type: array
-      source_table: tags
-      join:
-        table: post_tags
-        on: posts.id = post_tags.post_id
-      join_chain:
-        - table: tags
-          on: post_tags.tag_id = tags.id
+      source: Post.tags
       fields:
-        - field: id
-          source: tags.id
-        - field: name
-          source: tags.name
+        - { field: id, source: Tag.id }
+        - { field: name, source: Tag.name }
     - field: comments
       type: array
-      source_table: comments
-      join:
-        table: comments
-        on: posts.id = comments.post_id
+      source: Post.comments
       fields:
-        - field: id
-          source: comments.id
-        - field: body
-          source: comments.body
-        - field: author_name
-          source: comment_author.name
-          join:
-            table: users
-            alias: comment_author
-            on: comments.user_id = users.id
-        - field: created_at
-          source: comments.created_at
-
+        - { field: id, source: Comment.id }
+        - { field: body, source: Comment.body }
+        - { field: author_name, source: Comment.authorName }
+        - { field: created_at, source: Comment.createdAt }
   filters:
-    - param: post_id
-      maps_to: WHERE
-      condition: posts.id = :post_id
+    - { param: post_id, maps_to: WHERE, condition: "Post.id = :post_id" }
 ```
 
 ---
 
-## 8. バリデーション規則
+## 7. バリデーション規則（v0.2）
 
-パーサーが静的に検証すべき事項：
+v0.2 では検証が **OpenAPI ⇄ Domain ⇄ DB の3点照合**になる。
 
-1. `import.openapi` で参照したレスポンススキーマのフィールドと `response_mapping[].field` が一致すること
-2. `import.dbml` で参照したテーブル・カラムが `source` で使われているテーブル・カラムを含むこと
-3. `join` で使われるテーブルが `import.dbml` に含まれること（`join_chain` 内も含む）
-4. `filters[].param` が `import.openapi` のパラメータに存在すること
-5. `transforms[].target` が `response_mapping` のいずれかの `field` に対応していること
-6. `join.on` で参照されるテーブル・カラムが存在すること
-7. 同じテーブルが異なる結合条件で複数回参照される場合、必ず `alias` が指定されていること
-8. `aggregate` を使用するフィールドに `group_by` が明示されているか、ルートテーブルの主キーが推定可能であること
-9. `filters[].condition` で使用される `:パラメータ` がすべて `filters[].param` で宣言されていること
-10. `transforms[].when[].param` で参照されるパラメータが `import.openapi` に存在すること
-11. `source_table` が配列フィールドの `join` で参照されるテーブルと一致していること
-12. `allowed_columns` リスト外のカラムが動的ソート指定で使われていないこと
+### 7.1 構造規則
 
----
+1. `domain.entities` が1つ以上定義され、`usecase.root` が存在するエンティティを指すこと
+2. `response_mapping[].source` が `<Entity>.<field>` 形式で、その Entity・field が `domain` に存在すること（**DBカラム直接参照は禁止**）
+3. `response_mapping[].field` が `import.openapi` のレスポンススキーマのフィールドと一致すること
+4. 配列フィールドの `source` が `relations` を指し、`fields` が関連先エンティティのフィールドを射影していること
+5. `persistence.columns[].source`・`join`・`join_chain`・`aggregate` が参照するテーブル・カラムが `import.dbml` に存在すること（v0.1 規則 2/3/6 を persistence へ移設）
+6. 同一テーブルを異なる結合条件で複数回参照する場合、`alias` 必須（v0.1 規則 7）
+7. `aggregate` 使用フィールドに `group_by` が明示されるか、`root_table` の主キーが推定可能であること（v0.1 規則 8）
+8. `relations[].through` / `on` が参照するテーブル・カラムが `import.dbml` に存在すること
+9. `derived[].field` が当該エンティティの `fields` に存在すること
+10. `presentation[].target` が `response_mapping[].field` のいずれかに対応すること（v0.1 規則 5）
+11. `filters[].param` が `import.openapi` のパラメータに存在し、`condition` 内の `:param` がすべて宣言済みであること（v0.1 規則 4/9）
+12. `presentation[].when[].param` が `import.openapi` に存在すること（v0.1 規則 10）
+13. `allowed_columns` 外のカラムが動的ソート指定で使われていないこと（v0.1 規則 12）
 
-## 9. 視覚化
+### 7.2 型整合規則（v0.2 新規）
 
-`usml visualize` コマンドで生成されるHTMLの機能：
+ドメイン VO 型を軸に、両端の型を検証する。
 
-### 9.1 UI構成
+14. エンティティ fields の型が組み込み型または `value_objects` に存在すること
+15. **OpenAPI ⇄ Domain**: `response_mapping` で対応する OpenAPI フィールドの型/format が、ドメインフィールドの VO の `base`/`format` と整合すること（不一致は warning）
+16. **Domain ⇄ DB**: `persistence.columns` で対応する DBカラム型が、ドメインフィールドの VO の `base` と整合すること（不一致は warning）
 
-- **タブUI**: テーブルビューとビジュアルビューを切り替え可能
-- **OpenAPI情報の自動表示**: ヘッダーにHTTPメソッド・APIパス・ステータスコードを表示
-
-### 9.2 ビジュアルビュー
-
-3カラムレイアウトでデータフローを可視化：
-
-- **Response Fields カラム**: APIレスポンスのフィールド一覧
-  - ネストされたフィールドは階層構造で色分け表示（depth-1: 青、depth-2: 紫、depth-3: ピンク、depth-4: イエロー）
-- **Joins & Transforms カラム**: 結合・変換ロジックの詳細
-  - 各カードに種類バッジを表示（Simple / JOIN / JOIN Chain / Aggregate）
-  - JOIN条件や変換ルールを表示
-- **Tables カラム**: 使用されるテーブルとカラムの一覧
-  - エイリアスが設定されている場合は「実テーブル名 (as エイリアス)」の形式で表示
-
-**ホバーハイライト機能**:
-- Response Fieldsのカードにマウスを乗せると、関連する Joins & Transforms および Tables のカードが黄色くハイライトされる
-
-### 9.3 テーブルビュー
-
-構造化された表形式でデータを表示：
-
-- **Response Mapping テーブル**: フィールド・ソース・型・JOIN・変換を階層構造で一覧表示
-  - ネストされたフィールドは視覚的なインデント（`└─`）で表現
-- **Tables Summary テーブル**: 使用されるテーブルと参照されるカラムの一覧
-  - エイリアスが設定されている場合は「実テーブル名 (as エイリアス)」の形式で表示
-  - 例: `users (as comment_author)`
-- **Filters テーブル**: フィルタパラメータ・種類・詳細情報を一覧表示
-  - Parameter: パラメータ名
-  - Maps To: WHERE / PAGINATION / ORDER_BY 等
-  - Details: 条件式、ストラテジー、ページサイズ等
-- **Transforms テーブル**: 変換ロジックの詳細を一覧表示
-  - Target: 変換対象フィールド
-  - Type: COALESCE / CONCAT / CASE 等
-  - Sources: 変換元ソース
-  - Details: セパレータ、フォールバック値、条件数等
+> 型整合は当面 **warning** とし、段階的に error へ引き上げる。
 
 ---
 
-## 10. CLI コマンド
+## 8. 視覚化（v0.2）
 
-USML CLI は以下のサブコマンドを提供する。
+3カラム（Response / Joins / Tables）から **4カラム**へ拡張し、ドメイン層を中央に据える。
 
-### 10.1 validate - バリデーション実行
-
-```bash
-usml validate <ファイルパス> [--json]
+```
+[ Response Fields ] → [ Domain Entities ] → [ Persistence (Join/Aggregate) ] → [ Tables ]
 ```
 
-**オプション:**
-- `--json`: JSON形式で結果を出力（CI/CD連携用）
+- **Response Fields**: API レスポンスのフィールド（presentation 変換はバッジ表示）
+- **Domain Entities**: エンティティ・フィールド・VO 型・derived 導出を表示
+- **Persistence**: 各ドメインフィールドの JOIN・集約・alias
+- **Tables**: 使用テーブル・カラム
 
-**JSON出力形式:**
-```json
-{
-  "file": "examples/users-list.usml.yaml",
-  "status": "ok"|"error",
-  "diagnostics": [
-    {
-      "severity": "error"|"warning",
-      "rule": "規則名",
-      "message": "エラーメッセージ"
-    }
-  ]
-}
-```
-
-**使用例:**
-```bash
-# 通常のバリデーション
-usml validate examples/users-list.usml.yaml
-
-# JSON形式で出力
-usml validate --json examples/users-list.usml.yaml
-```
-
-### 10.2 visualize - データフロー図生成
-
-```bash
-usml visualize <ファイルパス> [-o|--output <出力先>]
-```
-
-**出力先の優先順位:**
-1. `-o/--output` オプション（最優先）
-2. USMLファイル内の `usecase.output` パラメータ
-3. デフォルト: `./output/<usecase.name>.html`
-
-**出力ディレクトリ:**
-- デフォルトで `./output/` ディレクトリに出力される
-- ディレクトリが存在しない場合は自動的に作成される
-
-**使用例:**
-```bash
-# デフォルト出力（./output/ユーザー一覧取得.html）
-usml visualize examples/users-list.usml.yaml
-
-# カスタムパスに出力
-usml visualize examples/users-list.usml.yaml -o custom.html
-
-# usecase.output パラメータで指定（./output/user-report.html）
-# USMLファイル内に output: user-report.html を記載
-usml visualize examples/users-list.usml.yaml
-```
-
-### 10.3 parse - AST確認
-
-```bash
-usml parse <ファイルパス>
-```
-
-USMLファイルをパースして、AST（抽象構文木）の情報を標準出力に表示する。
+ホバーで `Response → Domain → Persistence → Table` の対応経路をハイライトする。
 
 ---
 
-## 11. 今後の拡張候補（v0.2以降）
+## 9. 移行ガイド（v0.1 → v0.2）
 
-- **条件付きフィールド**: 特定条件下でのみレスポンスに含まれるフィールド（`include_when` キー）
-- **サブクエリ参照**: スカラーサブクエリや EXISTS チェック
-- **ミューテーション定義**: INSERT / UPDATE / DELETE のデータフロー
-- **キャッシュヒント**: 結果のキャッシュ戦略の声明
-- **ネストされたオブジェクト型マッピング**: 配列でなく単一オブジェクトのネスト
-- **Union / Discriminator 型分岐**: レスポンスの型が条件に応じて変わるケース
-- **認証コンテキスト**: リクエスト元のユーザー情報に基づくデータフィルタ（例: 自分のデータのみ参照可）
+v0.2 は破壊的変更。既存 `.usml.yaml` は次の手順で移行する。
+
+1. `version` を `"0.2"` に更新
+2. `domain.entities.<E>` を新設し、`root_table` を旧ルートテーブルに設定
+3. 旧 `response_mapping[].source`（DBカラム）を `persistence.columns` へ移す。`join`/`join_chain`/`aggregate`/`alias` もここへ移設
+4. 配列の `join`/`source_table` を `relations` へ変換
+5. 旧 `transforms` を §5.3 早見表に従い `domain.derived` と `usecase.presentation` へ振り分け
+6. `response_mapping[].source` をドメイン語彙 `<Entity>.<field>` に書き換え
+7. （任意）`value_objects` を定義し型整合検証を有効化
+
+> 将来的に `usml migrate <v0.1ファイル>` で 1〜6 を自動推論するコマンドを検討（本ドラフトのスコープ外）。
+
+---
+
+## 10. 実装ロードマップ
+
+| 段階 | 内容 | 対象 |
+|---|---|---|
+| 1 | AST 拡張: `Domain` / `Entity` / `Persistence` / `Relation` / `ValueObject` 型、`Usecase.presentation`・`root` | `core/src/ast.rs` |
+| 2 | パーサー: domain セクション・ドメイン語彙 `source` の解析 | `core/src/parser.rs` |
+| 3 | バリデーター: 規則 1〜13 を3点照合に再編、persistence へ JOIN/集約検証を移設 | `core/src/validator.rs` |
+| 4 | 型整合検証（規則 14〜16、warning） | `core/src/validator.rs` + resolver |
+| 5 | examples を v0.2 へ書き換え（§6） | `examples/` |
+| 6 | visualizer 4カラム化 | `core/src/visualizer.rs` |
+| 7 | v0.2 仕様を正式版へ昇格、README 更新 | `docs/spec/` `README.md` |
+
+---
+
+## 11. 今後の拡張候補（v0.3 以降）
+
+- `usml migrate` 自動移行コマンド
+- ミューテーション定義（INSERT / UPDATE / DELETE のデータフロー）
+- リポジトリ層の明示（複数データソース・外部API をドメインへ再構成）
+- 複数ユースケースの合成（1レスポンスを複数ユースケースから組み立てる）
+- 認証コンテキスト（`auth_context` によるデータフィルタの第一級化）
+- Union / Discriminator 型分岐

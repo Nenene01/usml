@@ -1,4 +1,4 @@
-version: "0.1"
+version: "0.2"
 
 import:
   openapi: ./api.yaml#paths["/users"].get.responses["200"]
@@ -6,37 +6,57 @@ import:
     - ./schema.dbml#tables["users"]
     - ./schema.dbml#tables["profiles"]
 
+domain:
+  value_objects:
+    - { name: UserId, base: integer }
+    - { name: Url, base: string, format: uri }
+    - { name: Email, base: string, format: email }
+  entities:
+    User:
+      fields:
+        id: UserId
+        name: string
+        email: Email
+        avatarUrl: Url
+        displayName: string
+        status: string
+        createdAt: datetime
+      persistence:
+        root_table: users
+        columns:
+          id: users.id
+          name: users.name
+          email: users.email
+          status: users.status
+          createdAt: users.created_at
+          avatarUrl:
+            source: profiles.avatar_url
+            join: { table: profiles, on: users.id = profiles.user_id }
+          displayName:
+            source: profiles.display_name
+            join: { table: profiles, on: users.id = profiles.user_id }
+      derived:
+        - field: displayName
+          type: COALESCE
+          sources: [profiles.display_name, users.name]
+          fallback: "anonymous"
+
 usecase:
   name: ユーザー一覧取得
   summary: ページネーション付きのユーザー一覧を返す
-
+  root: User
   response_mapping:
-    - field: id
-      source: users.id
-    - field: name
-      source: users.name
-    - field: email
-      source: users.email
-    - field: avatar_url
-      source: profiles.avatar_url
-      join:
-        table: profiles
-        on: users.id = profiles.user_id
-    - field: display_name
-      source: profiles.display_name
-
+    - { field: id, source: User.id }
+    - { field: name, source: User.name }
+    - { field: email, source: User.email }
+    - { field: avatar_url, source: User.avatarUrl }
+    - { field: display_name, source: User.displayName }
   filters:
-    - param: status
-      maps_to: WHERE
-      condition: users.status = :status
-    - param: page
-      maps_to: PAGINATION
-      strategy: offset
-      page_size: 20
-
-  transforms:
-    - target: display_name
-      type: COALESCE
-      sources:
-        - profiles.display_name
-        - users.name
+    - { param: status, maps_to: WHERE, condition: "User.status = :status" }
+    - { param: page, maps_to: PAGINATION, strategy: offset, page_size: 20 }
+  presentation:
+    - target: email
+      type: MASK
+      mask_pattern: "***@***.***"
+      condition:
+        - { param: viewer_role, operator: "!=", value: "admin" }

@@ -8,6 +8,7 @@ members = [
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
+indexmap = { version = "2", features = ["serde"] }
 thiserror = "1"
 clap = { version = "4", features = ["derive"] }
 openapi3-parser = "0.1"
