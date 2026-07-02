@@ -1,6 +1,6 @@
 use std::fs;
 
-use super::{OpenapiResponse, ResolverError};
+use super::{OpenapiField, OpenapiResponse, ResolverError};
 
 pub fn resolve_openapi(
     file_path: &str,
@@ -85,7 +85,7 @@ pub fn parse_openapi_content(
     Ok(OpenapiResponse { fields, parameters })
 }
 
-fn extract_response_fields(response: &openapi3_parser::open_api::Response) -> Vec<String> {
+fn extract_response_fields(response: &openapi3_parser::open_api::Response) -> Vec<OpenapiField> {
     if let Some(content) = &response.content
         && let Some(media_type) = content.get("application/json")
         && let Some(schema) = &media_type.schema
@@ -95,12 +95,20 @@ fn extract_response_fields(response: &openapi3_parser::open_api::Response) -> Ve
     Vec::new()
 }
 
-fn extract_fields_from_schema(schema: &openapi3_parser::open_api::Schema) -> Vec<String> {
+fn extract_fields_from_schema(schema: &openapi3_parser::open_api::Schema) -> Vec<OpenapiField> {
     if let Some(type_str) = &schema.type_
         && type_str == "object"
         && let Some(props) = &schema.properties
     {
-        return props.keys().cloned().collect();
+        return props
+            .iter()
+            .map(|(name, prop)| OpenapiField {
+                name: name.clone(),
+                // 各プロパティの JSON Schema type / format を抽出
+                type_: prop.type_.clone(),
+                format: prop.format.clone(),
+            })
+            .collect();
     }
     Vec::new()
 }
@@ -180,15 +188,37 @@ paths:
                     type: string
                   email:
                     type: string
+                    format: email
+                  created_at:
+                    type: string
+                    format: date-time
 "#;
         let result = parse_openapi_content(yaml, "test.yaml", "/users", "get", "200").unwrap();
         assert_eq!(result.parameters.len(), 2);
         assert!(result.parameters.contains(&"status".to_string()));
         assert!(result.parameters.contains(&"page".to_string()));
-        assert_eq!(result.fields.len(), 3);
-        assert!(result.fields.contains(&"id".to_string()));
-        assert!(result.fields.contains(&"name".to_string()));
-        assert!(result.fields.contains(&"email".to_string()));
+        assert_eq!(result.fields.len(), 4);
+        assert!(result.has_field("id"));
+        assert!(result.has_field("name"));
+        assert!(result.has_field("email"));
+
+        // type が抽出できること
+        let id = result.field("id").unwrap();
+        assert_eq!(id.type_.as_deref(), Some("integer"));
+        assert_eq!(id.format, None);
+
+        let name = result.field("name").unwrap();
+        assert_eq!(name.type_.as_deref(), Some("string"));
+        assert_eq!(name.format, None);
+
+        // type と format の両方が抽出できること
+        let email = result.field("email").unwrap();
+        assert_eq!(email.type_.as_deref(), Some("string"));
+        assert_eq!(email.format.as_deref(), Some("email"));
+
+        let created_at = result.field("created_at").unwrap();
+        assert_eq!(created_at.type_.as_deref(), Some("string"));
+        assert_eq!(created_at.format.as_deref(), Some("date-time"));
     }
 
     #[test]

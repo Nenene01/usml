@@ -1,7 +1,7 @@
 {
   "name": "usml-vscode",
   "displayName": "USML - Usecase Markup Language",
-  "description": "OpenAPI と DBML の間のデータフロー定義语言 USML のサポート",
+  "description": "OpenAPI と DBML の間のデータフローを定義する言語 USML のサポート",
   "version": "0.0.1",
   "publisher": "nenene01",
   "engines": {

@@ -1,0 +1,53 @@
+Project blog_db {
+  database_type: 'PostgreSQL'
+}
+
+Table users {
+  id integer [pk, increment]
+  name varchar [not null]
+  email varchar [unique, not null]
+  status varchar(255) [default: 'active']
+  created_at timestamp [default: `now()`]
+}
+
+Table profiles {
+  id integer [pk, increment]
+  user_id integer [ref: > users.id]
+  avatar_url varchar
+  display_name varchar
+  bio text
+}
+
+Table posts {
+  id integer [pk, increment]
+  user_id integer [ref: > users.id]
+  title varchar [not null]
+  body text
+  preview_text text
+  status varchar(255) [default: 'draft']
+  created_at timestamp [default: `now()`]
+}
+
+Table comments {
+  id integer [pk, increment]
+  post_id integer [ref: > posts.id]
+  user_id integer [ref: > users.id]
+  body text [not null]
+  created_at timestamp [default: `now()`]
+}
+
+Table likes {
+  id integer [pk, increment]
+  post_id integer [ref: > posts.id]
+  user_id integer [ref: > users.id]
+}
+
+Table tags {
+  id integer [pk, increment]
+  name varchar [not null]
+}
+
+Table post_tags {
+  post_id integer [ref: > posts.id]
+  tag_id integer [ref: > tags.id]
+}

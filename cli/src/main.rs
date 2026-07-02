@@ -7,7 +7,7 @@ use usml_core::{parser, validator, visualizer};
 fn main() {
     let matches = Command::new("usml")
         .about("Usecase Markup Language - API と DB のデータフローを声明的に定義する")
-        .version("0.1.0")
+        .version("0.2.0")
         .subcommand(
             Command::new("validate")
                 .about("USML ファイルのバリデーションを実行する")
@@ -72,7 +72,7 @@ fn main() {
             // サブコマンド未指定の場合はヘルプを表示
             Command::new("usml")
                 .about("Usecase Markup Language - API と DB のデータフローを声明的に定義する")
-                .version("0.1.0")
+                .version("0.2.0")
                 .subcommand(
                     Command::new("validate").about("USML ファイルのバリデーションを実行する"),
                 )
@@ -107,7 +107,12 @@ fn cmd_validate(file_path: &str, json_output: bool) {
         }
     };
 
-    let errors = validator::validate(&doc);
+    let base_dir = std::path::Path::new(file_path)
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| ".".to_string());
+    let errors = validator::validate_with_resolve(&doc, &base_dir);
 
     if json_output {
         let diagnostics: Vec<String> = errors
@@ -183,12 +188,23 @@ fn cmd_parse(file_path: &str) {
     if let Some(summary) = &doc.usecase.summary {
         println!("サマリー: {}", summary);
     }
+    println!("ルートエンティティ: {}", doc.usecase.root);
+    println!("値オブジェクト: {} 件", doc.domain.value_objects.len());
+    println!("エンティティ: {} 件", doc.domain.entities.len());
     println!(
         "レスポンスマッピング: {} フィールド",
         doc.usecase.response_mapping.len()
     );
     println!("フィルタ: {} 件", doc.usecase.filters.len());
-    println!("トランスフォーム: {} 件", doc.usecase.transforms.len());
+    println!("プレゼンテーション: {} 件", doc.usecase.presentation.len());
+
+    println!("\n--- ドメインエンティティ ---");
+    for (name, entity) in &doc.domain.entities {
+        println!("{} (root_table: {})", name, entity.persistence.root_table);
+        for (fname, ftype) in &entity.fields {
+            println!("  {}: {}", fname, ftype);
+        }
+    }
 
     println!("\n--- レスポンスマッピング ---");
     print_mappings(&doc.usecase.response_mapping, 0);
@@ -203,23 +219,7 @@ fn print_mappings(mappings: &[usml_core::ast::ResponseMapping], indent: usize) {
             .as_ref()
             .map(|t| format!(" [{}]", t))
             .unwrap_or_default();
-        println!("{}{}: {} {}", prefix, mapping.field, source_str, type_str);
-
-        if let Some(join) = &mapping.join {
-            let alias_str = join
-                .alias
-                .as_ref()
-                .map(|a| format!(" (alias: {})", a))
-                .unwrap_or_default();
-            println!(
-                "{}  └─ JOIN {} ON {}{}",
-                prefix, join.table, join.on, alias_str
-            );
-        }
-
-        if let Some(agg) = &mapping.aggregate {
-            println!("{}  └─ {}", prefix, agg.r#type);
-        }
+        println!("{}{}: {}{}", prefix, mapping.field, source_str, type_str);
 
         if let Some(sub_fields) = &mapping.fields {
             print_mappings(sub_fields, indent + 2);

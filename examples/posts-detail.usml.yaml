@@ -1,4 +1,4 @@
-version: "0.1"
+version: "0.2"
 
 import:
   openapi: ./api.yaml#paths["/posts/{post_id}"].get.responses["200"]
@@ -10,75 +10,100 @@ import:
     - ./schema.dbml#tables["tags"]
     - ./schema.dbml#tables["post_tags"]
 
+domain:
+  value_objects:
+    - { name: PostId, base: integer }
+    - { name: CommentId, base: integer }
+    - { name: TagId, base: integer }
+  entities:
+    Post:
+      fields:
+        id: PostId
+        title: string
+        body: string
+        bodyContent: string
+        authorName: string
+        likeCount: integer
+        status: string
+      persistence:
+        root_table: posts
+        columns:
+          id: posts.id
+          title: posts.title
+          body: posts.body
+          status: posts.status
+          authorName:
+            source: users.name
+            join: { table: users, on: posts.user_id = users.id }
+          likeCount:
+            source: likes.id
+            join: { table: likes, on: posts.id = likes.post_id }
+            aggregate: { type: COUNT, group_by: posts.id }
+      derived:
+        - field: bodyContent
+          type: CONDITIONAL_SOURCE
+          when:
+            - { source: posts.status, operator: "==", value: "draft" }
+          then_source: posts.preview_text
+          else_source: posts.body
+      relations:
+        comments:
+          target: Comment
+          kind: has_many
+          on: posts.id = comments.post_id
+        tags:
+          target: Tag
+          kind: many_to_many
+          through: { table: post_tags, on: "posts.id = post_tags.post_id" }
+          on: post_tags.tag_id = tags.id
+    Comment:
+      fields:
+        id: CommentId
+        body: string
+        authorName: string
+        createdAt: datetime
+      persistence:
+        root_table: comments
+        columns:
+          id: comments.id
+          body: comments.body
+          createdAt: comments.created_at
+          authorName:
+            source: comment_author.name
+            join: { table: users, alias: comment_author, on: comments.user_id = users.id }
+    Tag:
+      fields:
+        id: TagId
+        name: string
+      persistence:
+        root_table: tags
+        columns:
+          id: tags.id
+          name: tags.name
+
 usecase:
   name: 投稿詳細取得
   summary: 投稿本文・著者・コメント・いいねCount・タグを返す
-
+  root: Post
   response_mapping:
-    - field: id
-      source: posts.id
-    - field: title
-      source: posts.title
-    - field: body
-      source: posts.body
-    - field: author_name
-      source: users.name
-      join:
-        table: users
-        on: posts.user_id = users.id
-    - field: like_count
-      source: likes.id
-      join:
-        table: likes
-        on: posts.id = likes.post_id
-      aggregate:
-        type: COUNT
-        group_by: posts.id
+    - { field: id, source: Post.id }
+    - { field: title, source: Post.title }
+    - { field: body, source: Post.bodyContent }
+    - { field: author_name, source: Post.authorName }
+    - { field: like_count, source: Post.likeCount }
     - field: tags
       type: array
-      source_table: tags
-      join:
-        table: post_tags
-        on: posts.id = post_tags.post_id
-      join_chain:
-        - table: tags
-          on: post_tags.tag_id = tags.id
+      source: Post.tags
       fields:
-        - field: id
-          source: tags.id
-        - field: name
-          source: tags.name
+        - { field: id, source: Tag.id }
+        - { field: name, source: Tag.name }
     - field: comments
       type: array
-      source_table: comments
-      join:
-        table: comments
-        on: posts.id = comments.post_id
+      source: Post.comments
       fields:
-        - field: id
-          source: comments.id
-        - field: body
-          source: comments.body
-        - field: author_name
-          source: comment_author.name
-          join:
-            table: users
-            alias: comment_author
-            on: comments.user_id = users.id
-        - field: created_at
-          source: comments.created_at
-
+        - { field: id, source: Comment.id }
+        - { field: body, source: Comment.body }
+        - { field: author_name, source: Comment.authorName }
+        - { field: created_at, source: Comment.createdAt }
   filters:
-    - param: post_id
-      maps_to: WHERE
-      condition: posts.id = :post_id
-
-  # transforms:
-  #   - target: comments.body
-  #     type: MASK
-  #     source: comments.body
-  #     mask_pattern: ""
-  #     condition:
-  #       - source: posts.status
-  #         operator: "=="
-  #         value: "draft"
+    - { param: post_id, maps_to: WHERE, condition: "Post.id = :post_id" }

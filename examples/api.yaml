@@ -1,0 +1,76 @@
+openapi: "3.0.0"
+info:
+  title: Blog API
+  version: "1.0"
+paths:
+  /users:
+    get:
+      summary: ユーザー一覧取得
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+        - name: viewer_role
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                  name:
+                    type: string
+                  email:
+                    type: string
+                    format: email
+                  avatar_url:
+                    type: string
+                    format: uri
+                  display_name:
+                    type: string
+  /posts/{post_id}:
+    get:
+      summary: 投稿詳細取得
+      parameters:
+        - name: post_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                  title:
+                    type: string
+                  body:
+                    type: string
+                  author_name:
+                    type: string
+                  like_count:
+                    type: integer
+                  tags:
+                    type: array
+                    items:
+                      type: object
+                  comments:
+                    type: array
+                    items:
+                      type: object

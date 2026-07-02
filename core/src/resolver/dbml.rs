@@ -1,6 +1,6 @@
 use std::fs;
 
-use super::{DbmlTable, ResolverError};
+use super::{DbmlColumn, DbmlTable, ResolverError};
 
 /// DBML ファイルを読み込み、テーブル・カラム情報を抽出する
 pub fn resolve_dbml(file_path: &str) -> Result<Vec<DbmlTable>, ResolverError> {
@@ -18,10 +18,15 @@ pub fn parse_dbml_content(content: &str, source: &str) -> Result<Vec<DbmlTable>,
     let mut tables = Vec::new();
 
     for table in ast.tables() {
-        let columns: Vec<String> = table
+        let columns: Vec<DbmlColumn> = table
             .cols
             .iter()
-            .map(|c| c.name.to_string.clone())
+            .map(|c| DbmlColumn {
+                name: c.name.to_string.clone(),
+                // `ColumnType.raw` は型名・引数・配列を含む生の型表記
+                // （例: "varchar(255)", "integer", "timestamp"）
+                col_type: c.r#type.raw.clone(),
+            })
             .collect();
         tables.push(DbmlTable {
             name: table.ident.name.to_string.clone(),
@@ -91,15 +96,21 @@ Table profiles {
 
         let users = tables.iter().find(|t| t.name == "users").unwrap();
         assert_eq!(users.columns.len(), 4);
-        assert!(users.columns.contains(&"id".to_string()));
-        assert!(users.columns.contains(&"name".to_string()));
-        assert!(users.columns.contains(&"email".to_string()));
-        assert!(users.columns.contains(&"created_at".to_string()));
+        assert!(users.has_column("id"));
+        assert!(users.has_column("name"));
+        assert!(users.has_column("email"));
+        assert!(users.has_column("created_at"));
+
+        // col_type が型表記として取得できることを検証
+        assert_eq!(users.column("id").unwrap().col_type, "integer");
+        assert_eq!(users.column("name").unwrap().col_type, "varchar");
+        assert_eq!(users.column("created_at").unwrap().col_type, "timestamp");
 
         let profiles = tables.iter().find(|t| t.name == "profiles").unwrap();
         assert_eq!(profiles.columns.len(), 4);
-        assert!(profiles.columns.contains(&"user_id".to_string()));
-        assert!(profiles.columns.contains(&"avatar_url".to_string()));
+        assert!(profiles.has_column("user_id"));
+        assert!(profiles.has_column("avatar_url"));
+        assert_eq!(profiles.column("bio").unwrap().col_type, "text");
     }
 
     #[test]
@@ -140,10 +151,13 @@ Table likes {
         assert_eq!(tables.len(), 4);
 
         let posts = tables.iter().find(|t| t.name == "posts").unwrap();
-        assert!(posts.columns.contains(&"status".to_string()));
+        assert!(posts.has_column("status"));
+        // 引数付きの型表記が raw 文字列として保持されること
+        assert_eq!(posts.column("status").unwrap().col_type, "varchar(255)");
 
         let comments = tables.iter().find(|t| t.name == "comments").unwrap();
-        assert!(comments.columns.contains(&"post_id".to_string()));
-        assert!(comments.columns.contains(&"user_id".to_string()));
+        assert!(comments.has_column("post_id"));
+        assert!(comments.has_column("user_id"));
+        assert_eq!(comments.column("body").unwrap().col_type, "text");
     }
 }
