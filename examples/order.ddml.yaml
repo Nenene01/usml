@@ -1,0 +1,25 @@
+# ddml（項目定義の正本）の最小例。usml が import.ddml で参照しトレース検証する。
+# storage.status を confirmed から hypothesis に落とすと、usml が ddml.trace.status エラーを出す。
+ddml: "0.2"
+business:
+  id: BIZ-001
+  name: 受注管理
+features:
+  - id: FTR-001
+    name: 受注登録
+    items:
+      - id: ITM-001
+        name: 受注ID
+        storage:
+          status: confirmed
+          schema: { table: orders, column: id, type: integer }
+      - id: ITM-002
+        name: 受注番号
+        storage:
+          status: confirmed
+          schema: { table: orders, column: order_no, type: varchar(16) }
+      - id: ITM-003
+        name: 受注日
+        storage:
+          status: confirmed
+          schema: { table: orders, column: ordered_on, type: date }

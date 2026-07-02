@@ -4,15 +4,22 @@ use std::path::Path;
 use thiserror::Error;
 
 use crate::ast::{ColumnMapping, Domain, Entity, ResponseMapping, UsmlDocument, ValueObject};
-use crate::resolver::{self, DbmlTable, OpenapiResponse};
+use crate::resolver::{self, DbmlTable, DdmlItem, OpenapiResponse};
 
 /// 解決済みの外部スキーマ情報
 ///
 /// v0.2 では OpenAPI（Interface 層）と DBML（Infrastructure 層）の両端を保持し、
 /// ドメイン層を軸とした 3 点照合（§7.2）に用いる。
+/// v0.2.1 で ddml（項目定義の正本）を加え、項目 ⇄ DB 列のトレース検証を行う。
+#[derive(Default)]
 pub struct ResolveContext {
     pub openapi: Option<OpenapiResponse>,
     pub dbml_tables: Vec<DbmlTable>,
+    /// import.ddml から解決された項目一覧
+    pub ddml_items: Vec<DdmlItem>,
+    /// import.ddml が宣言され、少なくとも 1 ファイルの解決に成功したか。
+    /// false のときは ddml トレース検証（規則 17-19）を一切行わない（後方互換）。
+    pub ddml_present: bool,
 }
 
 impl ResolveContext {
@@ -128,6 +135,12 @@ fn validate_with_context(
     if !ctx.dbml_tables.is_empty() {
         validate_domain_db_types(doc, ctx, errors);
     }
+
+    // 規則 17-19: ddml 項目 ⇄ DB 列のトレース検証
+    // import.ddml が宣言され解決に成功したときのみ実行（未宣言時は完全後方互換）
+    if ctx.ddml_present {
+        validate_ddml_trace(doc, ctx, errors);
+    }
 }
 
 // ============================================================
@@ -137,10 +150,7 @@ fn validate_with_context(
 /// import 宣言を実際に解決する
 fn resolve_imports(doc: &UsmlDocument, base_dir: &str) -> (ResolveContext, Vec<ValidationError>) {
     let mut errors = Vec::new();
-    let mut ctx = ResolveContext {
-        openapi: None,
-        dbml_tables: Vec::new(),
-    };
+    let mut ctx = ResolveContext::default();
 
     // OpenAPI 解決
     if let Some(openapi_ref) = &doc.import.openapi
@@ -175,6 +185,27 @@ fn resolve_imports(doc: &UsmlDocument, base_dir: &str) -> (ResolveContext, Vec<V
                         format!("DBML解決に失敗しました: {}", e),
                     )),
                 }
+            }
+        }
+    }
+
+    // ddml 解決（import.ddml。fragment 無しの素のパスのリスト）
+    if let Some(ddml_refs) = &doc.import.ddml {
+        for ddml_ref in ddml_refs {
+            let full_path = Path::new(base_dir)
+                .join(ddml_ref)
+                .to_string_lossy()
+                .to_string();
+            match resolver::ddml::resolve_ddml(&full_path) {
+                Ok(items) => {
+                    // 解決に成功したら（項目 0 件でも）トレース検証を有効化する
+                    ctx.ddml_present = true;
+                    ctx.ddml_items.extend(items);
+                }
+                Err(e) => errors.push(ValidationError::Warning(
+                    "import.ddml".to_string(),
+                    format!("ddml解決に失敗しました: {}", e),
+                )),
             }
         }
     }
@@ -1139,6 +1170,115 @@ fn validate_domain_db_types(
 }
 
 // ============================================================
+// ddml トレース規則（規則 17-19）
+// ============================================================
+
+/// persistence が参照する実データ列 `(table, column)` を収集する。
+///
+/// 各 `ColumnMapping` の Simple 値 / Detailed.source を、join.alias を実テーブルへ
+/// 解決して返す。これは規則 5（[`validate_persistence_columns`]）が source として
+/// 照合する列集合と一致し、ddml トレース検証（規則 17-19）の対象列集合となる。
+fn collect_persistence_columns(doc: &UsmlDocument) -> Vec<(String, String)> {
+    let mut cols: Vec<(String, String)> = Vec::new();
+    for entity in doc.domain.entities.values() {
+        for mapping in entity.persistence.columns.values() {
+            let (source, alias_map) = match mapping {
+                ColumnMapping::Simple(s) => (s.as_str(), HashMap::new()),
+                ColumnMapping::Detailed(d) => {
+                    let mut map: HashMap<String, String> = HashMap::new();
+                    if let Some(join) = &d.join
+                        && let Some(alias) = &join.alias
+                    {
+                        map.insert(alias.clone(), join.table.clone());
+                    }
+                    (d.source.as_str(), map)
+                }
+            };
+            if let Some((table_ref, col)) = split_source_ref(source) {
+                let real_table = alias_map
+                    .get(table_ref)
+                    .map(|s| s.as_str())
+                    .unwrap_or(table_ref);
+                let pair = (real_table.to_string(), col.to_string());
+                if !cols.contains(&pair) {
+                    cols.push(pair);
+                }
+            }
+        }
+    }
+    cols
+}
+
+/// 規則 17-19: ddml 項目 ⇄ DB 列のトレース検証
+///
+/// - 規則 17 `ddml.trace.status`（Rule）: 参照列に対応する ddml 項目が存在するが
+///   storage が confirmed でない → 未確定の設計項目を実装マッピングに使用
+/// - 規則 18 `ddml.trace.column`（Warning）: 参照列がどの ddml 項目の schema にも無い
+///   → 設計定義に無い列を使用
+/// - 規則 19 `ddml.coverage`（Warning）: confirmed かつ schema 付きの ddml 項目が
+///   persistence でどこからも参照されていない → 実装マッピング漏れの可能性
+fn validate_ddml_trace(
+    doc: &UsmlDocument,
+    ctx: &ResolveContext,
+    errors: &mut Vec<ValidationError>,
+) {
+    let referenced = collect_persistence_columns(doc);
+
+    // 規則 17 & 18: 参照列ごとに ddml 項目を照合
+    for (table, col) in &referenced {
+        let matched: Vec<&DdmlItem> = ctx
+            .ddml_items
+            .iter()
+            .filter(|it| {
+                it.schema
+                    .as_ref()
+                    .is_some_and(|(t, c)| t == table && c == col)
+            })
+            .collect();
+
+        if matched.is_empty() {
+            errors.push(ValidationError::Warning(
+                "ddml.trace.column".to_string(),
+                format!(
+                    "persistence が参照する列 '{}.{}' が ddml のどの項目の schema にも定義されていません（設計定義に無い列を使用）",
+                    table, col
+                ),
+            ));
+        } else {
+            for it in matched {
+                if it.storage_status != "confirmed" {
+                    errors.push(ValidationError::Rule(
+                        "ddml.trace.status".to_string(),
+                        format!(
+                            "列 '{}.{}' に対応する ddml 項目 '{} {}' の storage が未確定（{}）です（未確定の設計項目を実装マッピングに使用）",
+                            table, col, it.item_id, it.item_name, it.storage_status
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+
+    // 規則 19: confirmed かつ schema 付きの項目のカバレッジ
+    for it in &ctx.ddml_items {
+        if it.storage_status != "confirmed" {
+            continue;
+        }
+        if let Some((t, c)) = &it.schema
+            && !referenced.iter().any(|(rt, rc)| rt == t && rc == c)
+        {
+            errors.push(ValidationError::Warning(
+                "ddml.coverage".to_string(),
+                format!(
+                    "ddml 項目 '{} {}'（{}.{}）は confirmed かつ schema 付きですが、この usml の persistence でどこからも参照されていません（実装マッピング漏れの可能性）",
+                    it.item_id, it.item_name, t, c
+                ),
+            ));
+        }
+    }
+}
+
+// ============================================================
 // テスト
 // ============================================================
 
@@ -1146,7 +1286,7 @@ fn validate_domain_db_types(
 mod tests {
     use super::*;
     use crate::parser;
-    use crate::resolver::{DbmlColumn, DbmlTable, OpenapiField, OpenapiResponse};
+    use crate::resolver::{DbmlColumn, DbmlTable, DdmlItem, OpenapiField, OpenapiResponse};
 
     // ---- ヘルパ ----
 
@@ -1877,6 +2017,7 @@ usecase:
                     col_type: "integer".to_string(),
                 }],
             }],
+            ..Default::default()
         };
         let yaml = r#"
 version: "0.2"
@@ -1935,6 +2076,7 @@ usecase:
                     ],
                 },
             ],
+            ..Default::default()
         };
         let yaml = r#"
 version: "0.2"
@@ -2160,6 +2302,7 @@ usecase:
                     col_type: "varchar(255)".to_string(),
                 }],
             }],
+            ..Default::default()
         };
         let yaml = r#"
 version: "0.2"
@@ -2204,6 +2347,7 @@ usecase:
                     },
                 ],
             }],
+            ..Default::default()
         };
         let yaml = r#"
 version: "0.2"
@@ -2251,5 +2395,190 @@ usecase:
         assert!(openapi_type_matches("number", "integer"));
         assert!(openapi_type_matches("integer", "integer"));
         assert!(!openapi_type_matches("integer", "string"));
+    }
+
+    // ---- 規則 17-19（ddml トレース）----
+
+    /// 受注 3 列（orders.id / orders.order_no / orders.note）を参照する最小 usml
+    fn ddml_trace_doc() -> &'static str {
+        r#"
+version: "0.2"
+import:
+  ddml:
+    - ./order.ddml.yaml
+domain:
+  entities:
+    Order:
+      fields: { id: integer, orderNo: string, note: string }
+      persistence:
+        root_table: orders
+        columns:
+          id: orders.id
+          orderNo: orders.order_no
+          note: orders.note
+usecase:
+  name: 受注一覧
+  root: Order
+  response_mapping:
+    - { field: id, source: Order.id }
+    - { field: order_no, source: Order.orderNo }
+    - { field: note, source: Order.note }
+"#
+    }
+
+    fn ddml_item(id: &str, name: &str, status: &str, schema: Option<(&str, &str)>) -> DdmlItem {
+        DdmlItem {
+            item_id: id.to_string(),
+            item_name: name.to_string(),
+            storage_status: status.to_string(),
+            schema: schema.map(|(t, c)| (t.to_string(), c.to_string())),
+        }
+    }
+
+    fn ddml_ctx(items: Vec<DdmlItem>) -> ResolveContext {
+        ResolveContext {
+            ddml_present: true,
+            ddml_items: items,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_rule17_trace_status_unconfirmed() {
+        // note は hypothesis → ddml.trace.status（エラー）
+        // id は ddml に無い → ddml.trace.column（警告）
+        let ctx = ddml_ctx(vec![
+            ddml_item(
+                "ITM-001",
+                "受注番号",
+                "confirmed",
+                Some(("orders", "order_no")),
+            ),
+            ddml_item("ITM-002", "備考", "hypothesis", Some(("orders", "note"))),
+        ]);
+        let doc = parser::parse(ddml_trace_doc()).unwrap();
+        let mut errors = Vec::new();
+        validate_ddml_trace(&doc, &ctx, &mut errors);
+        assert!(has_rule(&errors, "ddml.trace.status"));
+        assert!(has_warning(&errors, "ddml.trace.column"));
+    }
+
+    #[test]
+    fn test_rule17_all_confirmed_no_error() {
+        // 全列が confirmed かつ schema で網羅 → 3 ルールいずれも発動しない
+        let ctx = ddml_ctx(vec![
+            ddml_item("ITM-000", "受注ID", "confirmed", Some(("orders", "id"))),
+            ddml_item(
+                "ITM-001",
+                "受注番号",
+                "confirmed",
+                Some(("orders", "order_no")),
+            ),
+            ddml_item("ITM-002", "備考", "confirmed", Some(("orders", "note"))),
+        ]);
+        let doc = parser::parse(ddml_trace_doc()).unwrap();
+        let mut errors = Vec::new();
+        validate_ddml_trace(&doc, &ctx, &mut errors);
+        assert!(!has_rule(&errors, "ddml.trace.status"));
+        assert!(!has_warning(&errors, "ddml.trace.column"));
+        assert!(!has_warning(&errors, "ddml.coverage"));
+    }
+
+    #[test]
+    fn test_rule18_trace_column_not_in_ddml() {
+        // id / note に対応する ddml 項目が無い（order_no のみ定義）→ trace.column 警告
+        let ctx = ddml_ctx(vec![ddml_item(
+            "ITM-001",
+            "受注番号",
+            "confirmed",
+            Some(("orders", "order_no")),
+        )]);
+        let doc = parser::parse(ddml_trace_doc()).unwrap();
+        let mut errors = Vec::new();
+        validate_ddml_trace(&doc, &ctx, &mut errors);
+        assert!(has_warning(&errors, "ddml.trace.column"));
+        // order_no は定義済みなので status エラーは無い
+        assert!(!has_rule(&errors, "ddml.trace.status"));
+    }
+
+    #[test]
+    fn test_rule19_coverage_unreferenced() {
+        // extra_col は confirmed + schema だが usml から未参照 → coverage 警告。
+        // memo は confirmed だが schema 無し → coverage 対象外。
+        let ctx = ddml_ctx(vec![
+            ddml_item("ITM-000", "受注ID", "confirmed", Some(("orders", "id"))),
+            ddml_item(
+                "ITM-001",
+                "受注番号",
+                "confirmed",
+                Some(("orders", "order_no")),
+            ),
+            ddml_item("ITM-002", "備考", "confirmed", Some(("orders", "note"))),
+            ddml_item(
+                "ITM-003",
+                "追加列",
+                "confirmed",
+                Some(("orders", "extra_col")),
+            ),
+            ddml_item("ITM-004", "メモ", "confirmed", None),
+        ]);
+        let doc = parser::parse(ddml_trace_doc()).unwrap();
+        let mut errors = Vec::new();
+        validate_ddml_trace(&doc, &ctx, &mut errors);
+        assert!(has_warning(&errors, "ddml.coverage"));
+        // 参照列はすべて confirmed で網羅 → status/column は発動しない
+        assert!(!has_rule(&errors, "ddml.trace.status"));
+        assert!(!has_warning(&errors, "ddml.trace.column"));
+        // coverage 警告は extra_col の 1 件のみ（memo は schema 無しで対象外）
+        let coverage_count = errors
+            .iter()
+            .filter(|e| matches!(e, ValidationError::Warning(r, _) if r == "ddml.coverage"))
+            .count();
+        assert_eq!(coverage_count, 1);
+    }
+
+    #[test]
+    fn test_ddml_backward_compat_no_import() {
+        // ddml_present=false（import.ddml 無し）のときは 3 ルールとも一切発動しない
+        let doc = parser::parse(ddml_trace_doc()).unwrap();
+        let ctx = ResolveContext::default();
+        let mut errors = Vec::new();
+        validate_with_context(&doc, &ctx, &mut errors);
+        assert!(!has_rule(&errors, "ddml.trace.status"));
+        assert!(!has_warning(&errors, "ddml.trace.column"));
+        assert!(!has_warning(&errors, "ddml.coverage"));
+    }
+
+    #[test]
+    fn test_collect_persistence_columns_resolves_alias() {
+        // join.alias 経由の source が実テーブルに解決されて列集合へ入ること
+        let yaml = r#"
+version: "0.2"
+import:
+  ddml: ['./x.ddml.yaml']
+domain:
+  entities:
+    Comment:
+      fields: { id: integer, authorName: string }
+      persistence:
+        root_table: comments
+        columns:
+          id: comments.id
+          authorName:
+            source: comment_author.name
+            join: { table: users, alias: comment_author, on: comments.user_id = users.id }
+usecase:
+  name: テスト
+  root: Comment
+  response_mapping:
+    - { field: id, source: Comment.id }
+    - { field: author_name, source: Comment.authorName }
+"#;
+        let doc = parser::parse(yaml).unwrap();
+        let cols = collect_persistence_columns(&doc);
+        assert!(cols.contains(&("comments".to_string(), "id".to_string())));
+        // alias comment_author → 実テーブル users に解決
+        assert!(cols.contains(&("users".to_string(), "name".to_string())));
+        assert!(!cols.iter().any(|(t, _)| t == "comment_author"));
     }
 }

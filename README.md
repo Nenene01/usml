@@ -21,6 +21,7 @@ flowchart LR
 - **永続化マッピング** — JOIN・JOIN Chain・集約（COUNT/SUM/AVG/MIN/MAX）・エイリアスはすべて `persistence` に隔離
 - **OpenAPI・DBML 参照インポート** — 外部スキーマファイルを直接参照して検証
 - **3点照合バリデーション** — OpenAPI ⇄ Domain ⇄ DB の整合を16規則で検証
+- **ddml トレース検証** — `import.ddml` で項目定義の正本（ddml）を参照し、実装が未確定の設計を使っていないか・設計と実装がずれていないかを 3 規則で検出（xmls ファミリー連携）
 - **型整合検証** — VO型を軸に OpenAPI の type/format・DBカラム型を突き合わせ（不一致は警告）
 - **インタラクティブ可視化** — 4カラムのデータフロー図（Response → Domain → Persistence → Tables）とテーブルビュー
 - **VS Code拡張** — 保存時の自動バリデーション・データフロー図プレビュー
@@ -151,6 +152,28 @@ usecase:
 
 配列フィールド・多対多・集約を含む例は `examples/posts-detail.usml.yaml` を参照。
 
+### ddml トレース（xmls ファミリー連携）
+
+`import.ddml` に項目定義の正本（`.ddml.yaml`）を並べると、persistence が参照する DB 列と
+ddml 項目の `storage.status` を照合します（`import.ddml` 省略時は従来動作のまま）。
+
+```yaml
+import:
+  dbml:
+    - ./order-schema.dbml#tables["orders"]
+  ddml:                       # fragment 不要の素のパス（1ファイル=1業務）
+    - ./order.ddml.yaml
+```
+
+| 規則 | 種別 | 内容 |
+|---|---|---|
+| `ddml.trace.status` | error | 参照列に対応する ddml 項目の `storage` が `confirmed` でない（未確定の設計を実装に使用） |
+| `ddml.trace.column` | warning | 参照列が ddml のどの項目の `schema` にも無い（設計定義に無い列を使用） |
+| `ddml.coverage` | warning | `confirmed` かつ `schema` 付きの ddml 項目が persistence から未参照（実装マッピング漏れの可能性） |
+
+最小の実例は `examples/orders-list.usml.yaml`（+ `order.ddml.yaml` / `order-schema.dbml`）を参照。
+上流 ddml の `storage.status` を `hypothesis` に落とすと `ddml.trace.status` エラーが再現できます。
+
 ## VS Code 拡張
 
 `extensions/vscode/` ディレクトリに拡張のソースがあります。
@@ -167,13 +190,14 @@ usml/
 ├── core/src/
 │   ├── ast.rs               # AST 型定義（domain / usecase）
 │   ├── parser.rs            # YAML → AST パーサー
-│   ├── validator.rs         # 16規則バリデーション（3点照合 + 型整合）
+│   ├── validator.rs         # 16規則バリデーション（3点照合 + 型整合）+ ddml トレース検証
 │   ├── visualizer.rs        # 4カラムのインタラクティブHTMLデータフロー図生成
 │   └── resolver/
 │       ├── dbml.rs          # DBML 解析（カラム型抽出）
+│       ├── ddml.rs          # ddml 解析（項目 / storage.schema 抽出）
 │       └── openapi.rs       # OpenAPI 解析（type/format 抽出）
 ├── extensions/vscode/       # VS Code 拡張
-├── examples/                # サンプル USML / OpenAPI / DBML
+├── examples/                # サンプル USML / OpenAPI / DBML / ddml
 ├── output/                  # 生成されたHTMLファイル（デフォルト出力先）
 └── docs/spec/               # USML 仕様ドキュメント
 ```

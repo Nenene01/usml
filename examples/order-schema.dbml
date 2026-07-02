@@ -1,0 +1,9 @@
+Project order_db {
+  database_type: 'PostgreSQL'
+}
+
+Table orders {
+  id integer [pk, increment]
+  order_no varchar(16) [unique, not null]
+  ordered_on date [not null]
+}

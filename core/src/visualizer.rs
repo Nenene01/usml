@@ -1315,6 +1315,7 @@ mod tests {
                     "./schema.dbml#tables[\"users\"]".to_string(),
                     "./schema.dbml#tables[\"profiles\"]".to_string(),
                 ]),
+                ddml: None,
             },
             domain: Domain {
                 value_objects: vec![ValueObject {

@@ -1,4 +1,5 @@
 pub mod dbml;
+pub mod ddml;
 pub mod openapi;
 
 use thiserror::Error;
@@ -13,6 +14,9 @@ pub enum ResolverError {
 
     #[error("OpenAPI パースエラー '{0}': {1}")]
     OpenapiParseError(String, String),
+
+    #[error("ddml パースエラー '{0}': {1}")]
+    DdmlParseError(String, String),
 
     #[error("参照先が見つかりません: '{0}'")]
     NotFound(String),
@@ -43,6 +47,21 @@ pub struct DbmlColumn {
     pub name: String,
     /// DBML 上の型表記（例: "integer", "varchar(255)", "timestamp"）
     pub col_type: String,
+}
+
+/// ddml（.ddml.yaml）から抽出された項目情報
+///
+/// usml のトレース検証（item ⇄ DB 列）に必要な最小情報のみを保持する。
+#[derive(Debug, Clone)]
+pub struct DdmlItem {
+    /// 項目 ID（例: "ITM-001"）
+    pub item_id: String,
+    /// 項目名（例: "受注番号"）
+    pub item_name: String,
+    /// storage のステータス（"hypothesis" | "inquiring" | "confirmed"。省略時は "hypothesis"）
+    pub storage_status: String,
+    /// storage.schema から抽出した (table, column)。schema 未記入なら None
+    pub schema: Option<(String, String)>,
 }
 
 /// OpenAPI から抽出されたレスポンス情報

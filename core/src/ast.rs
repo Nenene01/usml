@@ -23,6 +23,10 @@ pub struct Import {
     pub openapi: Option<String>,
     #[serde(default)]
     pub dbml: Option<Vec<String>>,
+    /// ddml（項目定義の正本）への参照。fragment 不要の素のパスのリスト（1ファイル=1業務）。
+    /// 省略時は ddml トレース検証を行わない（完全後方互換）。
+    #[serde(default)]
+    pub ddml: Option<Vec<String>>,
 }
 
 // ============================================================

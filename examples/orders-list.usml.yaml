@@ -1,0 +1,30 @@
+# ddml 連携の実例。import.ddml で項目定義（正本）を参照し、
+# persistence が参照する DB 列と ddml 項目の storage 確定状況を照合する。
+version: "0.2"
+import:
+  dbml:
+    - ./order-schema.dbml#tables["orders"]
+  ddml:
+    - ./order.ddml.yaml
+domain:
+  value_objects:
+    - { name: OrderId, base: integer }
+  entities:
+    Order:
+      fields:
+        id: OrderId
+        orderNo: string
+        orderedOn: datetime
+      persistence:
+        root_table: orders
+        columns:
+          id: orders.id
+          orderNo: orders.order_no
+          orderedOn: orders.ordered_on
+usecase:
+  name: 受注一覧取得
+  root: Order
+  response_mapping:
+    - { field: id, source: Order.id }
+    - { field: order_no, source: Order.orderNo }
+    - { field: ordered_on, source: Order.orderedOn }

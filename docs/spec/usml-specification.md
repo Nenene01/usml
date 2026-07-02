@@ -60,6 +60,8 @@ import:
   openapi: <パス>#<参照先>
   dbml:
     - <パス>#tables["<テーブル名>"]
+  ddml:                              # v0.2.1 で新設（任意）。項目定義の正本を参照
+    - <パス>                          # fragment 不要の素のパス（1ファイル=1業務）
 
 # v0.2 で新設（必須）
 domain:
@@ -587,6 +589,23 @@ v0.2 では検証が **OpenAPI ⇄ Domain ⇄ DB の3点照合**になる。
 16. **Domain ⇄ DB**: `persistence.columns` で対応する DBカラム型が、ドメインフィールドの VO の `base` と整合すること（不一致は warning）
 
 > 型整合は当面 **warning** とし、段階的に error へ引き上げる。
+
+### 7.3 ddml トレース規則（v0.2.1 新規）
+
+`import.ddml` で項目定義の正本（`.ddml.yaml`）を参照した場合のみ実行する。
+`import.ddml` を省略すると 3 規則とも一切発動せず、従来動作と完全に互換。
+
+`.ddml.yaml` は usml 内の最小 serde 構造体で読み（ddml クレートには依存しない・未知フィールドは無視）、
+各項目の `{ item_id, item_name, storage_status, schema:(table, column) }` を抽出する。
+`storage.status` 省略時は `hypothesis` 扱い。照合対象の列集合は規則 5 の `source` と同一
+（`ColumnMapping::Simple` の `table.column`・`Detailed.source`。`join.alias` は実テーブルへ解決）。
+
+17. **`ddml.trace.status`**（error）: persistence が参照する列に対応する ddml 項目が存在するが、その `storage` が `confirmed` でないこと ＝ 未確定の設計項目を実装マッピングに使用している
+18. **`ddml.trace.column`**（warning）: persistence が参照する列が、ddml のどの項目の `schema` にも定義されていないこと ＝ 設計定義に無い列を使用している
+19. **`ddml.coverage`**（warning）: `confirmed` かつ `schema` 付きの ddml 項目が、この usml の persistence でどこからも参照されていないこと ＝ 実装マッピング漏れの可能性
+
+> ddml → usml のトレースにより「未確定の設計を実装に持ち込んでいないか」「設計と実装がずれていないか」を検出する。
+> 上流の ddml で `storage.status` を `confirmed` に上げることで規則 17 のエラーが解消される。
 
 ---
 
