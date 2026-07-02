@@ -1,0 +1,13 @@
+# ddml v0.3 辞書。論理名（entity）→ 物理テーブルの対応を集約する。
+# usml は同ディレクトリ → 親ディレクトリの順でこのファイルを探し、
+# .ddml.yaml の storage.entity から物理テーブルを解決する（契約 §1.5.4）。
+ddml: "0.3"
+sources:
+  - name: POS
+    description: 店舗POSシステム
+storages:
+  - name: データベース
+entities:
+  - name: 受注情報
+    description: 受注の基本情報。
+    table: orders          # 物理名。開発者レイヤーで確定済み

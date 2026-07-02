@@ -171,7 +171,13 @@ import:
 | `ddml.trace.column` | warning | 参照列が ddml のどの項目の `schema` にも無い（設計定義に無い列を使用） |
 | `ddml.coverage` | warning | `confirmed` かつ `schema` 付きの ddml 項目が persistence から未参照（実装マッピング漏れの可能性） |
 
-最小の実例は `examples/orders-list.usml.yaml`（+ `order.ddml.yaml` / `order-schema.dbml`）を参照。
+ddml v0.3 では物理テーブル名を項目に直書きせず論理名（`storage.entity`）で管理します。usml は各
+`.ddml.yaml` に対し **同じディレクトリ → 親ディレクトリ**の順で辞書 `ddml.dict.yaml` を探し、
+`entities[].table` から物理テーブルを解決します（辞書が無ければ空辞書、読めなければ警告して続行）。
+解決順は **`entity.table`（辞書）> `schema.table`（v0.2 互換）** で、`schema.table` 直書きの v0.2 形式は
+そのまま動く完全後方互換です。
+
+最小の実例は `examples/orders-list.usml.yaml`（+ `order.ddml.yaml` / `ddml.dict.yaml` / `order-schema.dbml`）を参照。
 上流 ddml の `storage.status` を `hypothesis` に落とすと `ddml.trace.status` エラーが再現できます。
 
 ## VS Code 拡張

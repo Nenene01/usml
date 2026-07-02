@@ -600,6 +600,21 @@ v0.2 では検証が **OpenAPI ⇄ Domain ⇄ DB の3点照合**になる。
 `storage.status` 省略時は `hypothesis` 扱い。照合対象の列集合は規則 5 の `source` と同一
 （`ColumnMapping::Simple` の `table.column`・`Detailed.source`。`join.alias` は実テーブルへ解決）。
 
+#### 辞書探索と物理テーブル解決（v0.3）
+
+ddml v0.3 では物理テーブル名を項目に直書きせず、論理名（`storage.entity`）で管理し、
+物理名は辞書 `ddml.dict.yaml` の `entities[].table` で確定する。usml は
+`import.ddml` で指定された各 `.ddml.yaml` に対し、**同じディレクトリ → その親ディレクトリ**の順で
+`ddml.dict.yaml` を探し、最初に見つかったものを辞書として使う（無ければ空辞書）。
+辞書が読めない / 解析不能なときは警告を 1 件出し、空辞書で続行する（既存の import 解決失敗と同じ流儀）。
+
+物理テーブルの解決順（契約 §1.5.2 と共通）は **`entity.table`（辞書）> `schema.table`（v0.2 互換）**。
+両方あって不一致でも usml は entity を優先し検証しない（不一致は ddml 側 E016 の責務）。`column` は
+従来どおり `schema.column`。`table` と `column` が揃ったときのみ上記トレース規則の対象になる。
+entity が辞書に無い / entity の `table` が未確定で `schema.table` も無い項目は `schema` 抽出が `None` と
+なり、規則 17-19 の対象外（coverage にも出ない）。`ddml.dict.yaml` を置かない v0.2 形式
+（`schema.table` 直書き）はそのまま解決され、完全後方互換。
+
 17. **`ddml.trace.status`**（error）: persistence が参照する列に対応する ddml 項目が存在するが、その `storage` が `confirmed` でないこと ＝ 未確定の設計項目を実装マッピングに使用している
 18. **`ddml.trace.column`**（warning）: persistence が参照する列が、ddml のどの項目の `schema` にも定義されていないこと ＝ 設計定義に無い列を使用している
 19. **`ddml.coverage`**（warning）: `confirmed` かつ `schema` 付きの ddml 項目が、この usml の persistence でどこからも参照されていないこと ＝ 実装マッピング漏れの可能性

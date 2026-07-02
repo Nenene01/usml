@@ -1,6 +1,7 @@
-# ddml（項目定義の正本）の最小例。usml が import.ddml で参照しトレース検証する。
+# ddml（項目定義の正本）の v0.3 例。usml が import.ddml で参照しトレース検証する。
+# v0.3 では物理テーブルは storage.entity（論理名）経由で辞書 ddml.dict.yaml から解決する。
 # storage.status を confirmed から hypothesis に落とすと、usml が ddml.trace.status エラーを出す。
-ddml: "0.2"
+ddml: "0.3"
 business:
   id: BIZ-001
   name: 受注管理
@@ -12,14 +13,17 @@ features:
         name: 受注ID
         storage:
           status: confirmed
-          schema: { table: orders, column: id, type: integer }
+          entity: 受注情報          # table は辞書 entities の「受注情報」から解決（= orders）
+          schema: { column: id, type: integer }
       - id: ITM-002
         name: 受注番号
         storage:
           status: confirmed
-          schema: { table: orders, column: order_no, type: varchar(16) }
+          entity: 受注情報
+          schema: { column: order_no, type: varchar(16) }
       - id: ITM-003
         name: 受注日
         storage:
           status: confirmed
-          schema: { table: orders, column: ordered_on, type: date }
+          entity: 受注情報
+          schema: { column: ordered_on, type: date }

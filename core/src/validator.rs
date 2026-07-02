@@ -197,10 +197,14 @@ fn resolve_imports(doc: &UsmlDocument, base_dir: &str) -> (ResolveContext, Vec<V
                 .to_string_lossy()
                 .to_string();
             match resolver::ddml::resolve_ddml(&full_path) {
-                Ok(items) => {
+                Ok((items, dict_warnings)) => {
                     // 解決に成功したら（項目 0 件でも）トレース検証を有効化する
                     ctx.ddml_present = true;
                     ctx.ddml_items.extend(items);
+                    // 辞書探索での警告（読めない / 解析不能な ddml.dict.yaml）を伝播する
+                    for msg in dict_warnings {
+                        errors.push(ValidationError::Warning("import.ddml".to_string(), msg));
+                    }
                 }
                 Err(e) => errors.push(ValidationError::Warning(
                     "import.ddml".to_string(),
